@@ -1,0 +1,46 @@
+# Secrets (only .env.example is committed)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Run artefacts (keep the curated demo run only)
+runs/*
+!runs/demo/
+
+# Vendor reference material and large media
+reference/*.zip
+*.mp4
+*.mov
+
+# Frames and screenshots (docs images are allowed)
+*.jpg
+*.jpeg
+*.png
+!docs/**/*.png
+
+# STruC++ / OpenPLC build output
+*.o
+*.so
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

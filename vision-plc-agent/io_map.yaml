@@ -1,0 +1,57 @@
+# I/O map: the contract between hardware, PLC code, GPIO plugin, Modbus and vision.
+# Change this file first; code reads it, never hard-codes pins or addresses.
+version: 1
+
+signals:
+  start_btn:
+    direction: input
+    type: BOOL
+    iec: "%IX0.0"
+    modbus: {table: discrete_input, address: 0}
+    gpio: {bcm: 5, pull: up, active_low: true}
+  stop_btn:
+    direction: input
+    type: BOOL
+    iec: "%IX0.1"
+    modbus: {table: discrete_input, address: 1}
+    gpio: {bcm: 6, pull: up, active_low: true}
+  lamp_red:
+    direction: output
+    type: BOOL
+    iec: "%QX0.0"
+    modbus: {table: coil, address: 0}
+    gpio: {bcm: 17}
+    vision: {prompt: "red LED", measure: brightness}
+  lamp_green:
+    direction: output
+    type: BOOL
+    iec: "%QX0.1"
+    modbus: {table: coil, address: 1}
+    gpio: {bcm: 27}
+    vision: {prompt: "green LED", measure: brightness}
+  lamp_yellow:
+    direction: output
+    type: BOOL
+    iec: "%QX0.2"
+    modbus: {table: coil, address: 2}
+    gpio: {bcm: 22}
+    vision: {prompt: "yellow LED", measure: brightness}
+  arm_angle:
+    direction: output
+    type: INT
+    iec: "%QW0"
+    range: [0, 180]          # degrees; clamped in the GPIO plugin
+    modbus: {table: holding_register, address: 0}
+    pca9685: {channel: 0}
+    vision: {prompt: "servo arm", measure: angle}
+    optional: true           # MVP works without the servo
+
+stimulus:                    # owned by pi/stimulus_service only
+  stim_start: {bcm: 26, drives: start_btn}   # 1 kΩ to the GPIO5 node
+  stim_stop:  {bcm: 13, drives: stop_btn}    # 1 kΩ to the GPIO6 node
+
+safe_state:                  # what stop_btn / PLC stop must produce
+  lamp_red: false
+  lamp_green: false
+  lamp_yellow: false
+  arm_angle: 0
