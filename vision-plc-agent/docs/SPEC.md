@@ -144,7 +144,7 @@ The agent runs on the laptop in Python; the Pi runs OpenPLC natively plus two sm
 **Raspberry Pi**
 
 - Raspberry Pi OS 64-bit, SSH and I2C enabled
-- [OpenPLC Runtime v4](https://github.com/Autonomy-Logic/openplc-runtime), native install, version pinned
+- [OpenPLC Runtime v4](https://github.com/Autonomy-Logic/openplc-runtime), native install, pinned to v4.3.1 (verified against the bench Pi on 31 Oct 2026; REST: login, version, status, compilation-status)
 - Plugin venv (`venvs/gpio_rig`) with `gpiozero`, `lgpio`, Adafruit `servokit`
 - `pi/.venv` for the stimulus and frame services (`lgpio`, `fastapi`, `uvicorn`, `opencv-python-headless`)
 
