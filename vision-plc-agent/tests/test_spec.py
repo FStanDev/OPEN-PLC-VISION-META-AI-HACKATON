@@ -33,11 +33,14 @@ def _task(**overrides: object) -> TaskSpec:
     return TaskSpec.model_validate(base)
 
 
-def test_loads_led_only_spec() -> None:
+def test_loads_start_lamp_arm_spec() -> None:
     spec = load_task_spec(ROOT / "specs" / "start_lamp_arm.yaml")
     assert spec.task_id == "start_lamp_arm"
-    assert "arm_angle" not in spec.signals
+    assert spec.signals == ["start_btn", "stop_btn", "lamp_red", "arm_angle"]
     assert [t.name for t in spec.tests] == ["start_latches_lamp", "stop_clears_lamp"]
+    by_name = {t.name: t for t in spec.tests}
+    assert ("arm_angle", 90) in [(e.signal, e.value) for e in by_name["start_latches_lamp"].expect]
+    assert ("arm_angle", 0) in [(e.signal, e.value) for e in by_name["stop_clears_lamp"].expect]
     check_against_io_map(spec, load_io_map())  # must not raise
 
 

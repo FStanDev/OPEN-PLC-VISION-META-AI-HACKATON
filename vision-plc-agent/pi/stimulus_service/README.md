@@ -10,7 +10,8 @@ lists the known buttons. Buttons resolve through `io_map.yaml` `stimulus`
 
 ```bash
 cd ~/Developer/vision-plc-agent
-python3 -m venv .venvs/stimulus
+sudo apt install -y python3-lgpio   # gpiozero's Pi 5 pin factory (no pip wheel)
+python3 -m venv --system-site-packages .venvs/stimulus
 .venvs/stimulus/bin/pip install -r pi/stimulus_service/requirements.txt
 PI_BIND=<tailscale-ip> .venvs/stimulus/bin/python pi/stimulus_service/service.py
 ```

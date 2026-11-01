@@ -128,7 +128,9 @@ class GpioZeroBackend(GpioBackend):
         from gpiozero import DigitalInputDevice
 
         self._close_pin(bcm)
-        self._devices[bcm] = DigitalInputDevice(bcm, pull_up=None)  # floating input
+        # Floating input lets go of the node; active_state is never read
+        # but gpiozero requires it when no pull is selected.
+        self._devices[bcm] = DigitalInputDevice(bcm, pull_up=None, active_state=True)
 
     def close(self) -> None:
         for bcm in list(self._devices):

@@ -1,0 +1,1 @@
+{"_note": "Placeholder: the runtime's plugins.conf parser (strtok) cannot handle an empty 5th field, so this file must exist for the 6th field (venv_path) to be read. The plugin never reads this file."}

@@ -1,10 +1,10 @@
-# LED-only first version (no servo yet): pressing start latches the red lamp;
-# stop turns everything off. arm_angle expectations join once the servo is wired.
+# Pressing start latches the red lamp and moves the arm to 90 degrees.
+# Stop turns everything off and returns the arm to 0.
 task_id: start_lamp_arm
 description: >
-  When start is pressed, latch the red lamp on.
-  Stop turns everything off.
-signals: [start_btn, stop_btn, lamp_red]
+  When start is pressed, latch the red lamp on and move the arm to 90 degrees.
+  Stop turns everything off and returns the arm to 0.
+signals: [start_btn, stop_btn, lamp_red, arm_angle]
 tests:
   - name: start_latches_lamp
     stimulus:
@@ -12,6 +12,7 @@ tests:
       - {at_ms: 200, release: start_btn}
     expect:
       - {signal: lamp_red, value: true, within_ms: 500}
+      - {signal: arm_angle, value: 90, tolerance: 10, within_ms: 1500}
   - name: stop_clears_lamp
     stimulus:
       - {at_ms: 0, press: start_btn}
@@ -20,3 +21,4 @@ tests:
       - {at_ms: 1200, release: stop_btn}
     expect:
       - {signal: lamp_red, value: false, within_ms: 1500}
+      - {signal: arm_angle, value: 0, tolerance: 10, within_ms: 2500}

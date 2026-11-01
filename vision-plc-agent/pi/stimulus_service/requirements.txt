@@ -1,4 +1,8 @@
 # Pi venv for the stimulus service.
+# Plus the apt package python3-lgpio (gpiozero's only Pi 5 pin factory):
+# create the venv with --system-site-packages so the venv sees it.
+#   sudo apt install -y python3-lgpio
+#   python3 -m venv --system-site-packages .venvs/stimulus
 pydantic>=2,<3
 pyyaml>=6,<7
 gpiozero>=2.0,<3
