@@ -1,0 +1,2 @@
+# Pi venv for the frame service.
+opencv-python-headless>=4.10,<6
