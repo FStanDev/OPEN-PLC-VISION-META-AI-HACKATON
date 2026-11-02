@@ -86,6 +86,7 @@ _FAKE_CV2 = SimpleNamespace(
     CAP_PROP_AUTO_WB=102,
     CAP_PROP_AUTOFOCUS=103,
     CAP_PROP_GAIN=104,
+    CAP_PROP_WB_TEMPERATURE=105,
 )
 
 
@@ -113,6 +114,15 @@ def test_lock_disables_auto_priority_and_gain_then_holds_gain() -> None:
         assert argv[0] == "v4l2-ctl" and argv[1:3] == ["-d", "/dev/video0"]
     assert (_FAKE_CV2.CAP_PROP_AUTO_EXPOSURE, 1) in capture.sets
     assert (_FAKE_CV2.CAP_PROP_GAIN, 42.0) in capture.sets  # current value held
+
+
+def test_lock_sets_white_balance_temperature() -> None:
+    """Manual WB needs an explicit temperature or colors drift (bench: orange cast)."""
+    _ok_runner.calls.clear()
+    capture = FakeCapture({_FAKE_CV2.CAP_PROP_GAIN: 42.0})
+    lock_camera("/dev/video0", capture, _FAKE_CV2, runner=_ok_runner)
+    assert "white_balance_temperature=4500" in _v4l2_pairs(_ok_runner.calls)
+    assert (_FAKE_CV2.CAP_PROP_WB_TEMPERATURE, 4500) in capture.sets
 
 
 def test_lock_survives_missing_v4l2_with_warning(capsys) -> None:

@@ -43,6 +43,10 @@ Expect `live: 6 bindings, poll 10 ms` (5 without the servo). If `%QW0` stays
 dark, check the bus number with `i2cdetect -l` — it is `I2C_BUS` in
 `pi/pca9685.py`.
 
+`io_map.yaml` is read once at plugin init: after editing it, restart the
+runtime (`sudo systemctl restart openplc-runtime.service`) or the running
+plugin keeps driving the old pins and channels.
+
 ## Known limitation
 
 The plugin cannot see PLC run state (the runtime exposes no query to

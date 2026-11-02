@@ -165,11 +165,15 @@ class RestPlcClient(PlcClient):
             raise PlcError(f"status: unexpected reply {response.text[:200]!r}") from exc
         if not isinstance(data, dict):
             raise PlcError(f"status: unexpected reply {response.text[:200]!r}")
-        running = bool(data.get("running", False)) or str(data.get("status", "")).lower() in {
-            "running",
-            "started",
-            "on",
-        }
+        # Observed v4.3.1 shape: {"status": "STATUS:RUNNING", "switchPosition": "run"}.
+        status_text = str(data.get("status", "")).lower()
+        if status_text.startswith("status:"):
+            status_text = status_text[len("status:") :]
+        running = (
+            bool(data.get("running", False))
+            or status_text in {"running", "started", "on"}
+            or str(data.get("switchPosition", "")).lower() in {"run", "running"}
+        )
         compile_state = str(data.get("compilation_status", data.get("compile_state", "NONE")))
         return PlcStatus(running=running, compile_state=compile_state)
 

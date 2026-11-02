@@ -40,6 +40,10 @@ def make_transport(state: dict[str, Any], calls: list[tuple[str, str]]) -> httpx
         if request.url.path == "/api/status":
             if state.get("status_mode") == "bad-shape":
                 return httpx.Response(200, text="running?")
+            if state.get("status_mode") == "v4-shape":
+                return httpx.Response(
+                    200, json={"status": "STATUS:RUNNING", "switchPosition": "run"}
+                )
             return httpx.Response(
                 200,
                 json={"running": state["running"], "compilation_status": state["compile"][-1]},
@@ -137,6 +141,17 @@ def test_start_stop_status_roundtrip() -> None:
     assert (status.running, status.compile_state) == (True, "SUCCESS")
     plc.stop()
     assert plc.status().running is False
+
+
+def test_status_parses_observed_v4_shape() -> None:
+    """Bench Pi v4.3.1 answers {"status": "STATUS:RUNNING", "switchPosition": "run"}."""
+    state = fresh_state()
+    state["status_mode"] = "v4-shape"
+    plc = make_client(state, [])
+    plc.login("admin", "secret")
+    status = plc.status()
+    assert status.running is True
+    assert status.compile_state == "NONE"  # v4 /status carries no compile info
 
 
 def test_status_rejects_unexpected_reply() -> None:

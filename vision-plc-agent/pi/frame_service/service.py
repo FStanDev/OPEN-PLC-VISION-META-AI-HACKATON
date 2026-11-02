@@ -28,6 +28,10 @@ V4L2_LOCK_CONTROLS: tuple[tuple[str, int], ...] = (
     ("exposure_auto", 1),  # manual
     ("exposure_absolute", 200),
     ("white_balance_automatic", 0),
+    # Manual WB also needs an explicit temperature or colors drift with the
+    # driver's leftover value (bench frames had an orange cast). Neutral
+    # indoor; stability matters more than the exact value (M5 reads grayscale).
+    ("white_balance_temperature", 4500),
     ("focus_auto", 0),
     ("focus_automatic_continuous", 0),
     ("gain_automatic", 0),
@@ -60,6 +64,7 @@ def lock_camera(
         cv2.CAP_PROP_AUTO_EXPOSURE: 1,  # manual
         cv2.CAP_PROP_EXPOSURE: 200,
         cv2.CAP_PROP_AUTO_WB: 0,
+        cv2.CAP_PROP_WB_TEMPERATURE: 4500,
         cv2.CAP_PROP_AUTOFOCUS: 0,
     }
     for prop, value in wanted.items():
