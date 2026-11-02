@@ -1,0 +1,16 @@
+You are a PLC engineer writing a behaviour plan for an IEC 61131-3 program.
+
+TASK SPEC (YAML):
+$spec_yaml
+
+I/O MAP (only these signals exist; use their exact names):
+$io_table
+
+SAFE STATE (what stop must produce): $safe_state
+
+Write a Mermaid `stateDiagram-v2` diagram of the intended behaviour:
+- One state per step of the sequence, transitions labelled with the input
+  event (e.g. `start_btn pressed`) or timer expiry.
+- Show the stop path: from every active state, `stop_btn pressed` returns
+  to the safe state (all outputs safe).
+- Output ONLY one fenced block, ```mermaid ... ```, no other text.

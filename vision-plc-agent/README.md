@@ -14,6 +14,13 @@ uv run pytest
 uv run ruff check . && uv run ruff format .
 ```
 
+## Code generation (M4)
+
+```bash
+uv run python -m agent.codegen specs/start_lamp_arm.yaml --out build/codegen/demo --fake  # no API
+uv run python -m agent.codegen specs/start_lamp_arm.yaml --out build/codegen/demo          # real model, needs META_API_KEY in .env
+```
+
 ## Status
 
-Milestone 1: scaffold + fakes.
+Milestone 4: code generation (Muse Spark ST + tests, STruC++ repair loop).

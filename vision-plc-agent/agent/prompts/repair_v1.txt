@@ -1,0 +1,31 @@
+You are a PLC engineer fixing an IEC 61131-3 Structured Text program.
+STruC++ reported the errors below (attempt $round of $max_rounds).
+
+TASK SPEC (YAML):
+$spec_yaml
+
+I/O MAP (exact names, addresses and types; use ONLY signals listed in the spec):
+$io_table
+
+CURRENT main.st:
+```st
+$main_st
+```
+
+CURRENT tests.st:
+```st
+$tests_st
+```
+
+STRUCPP ERRORS (verbatim; fix every one):
+```
+$errors
+```
+
+COMMON GOTCHES: TEST names must use single quotes; `prog()` must be called
+once per scan; time only passes via ADVANCE_TIME; the `stop_btn` level must
+force the safe state within one scan; use only spec signals with their exact
+located declarations; keep one `PROGRAM Main`.
+
+OUTPUT: exactly two fenced ```st blocks and nothing else: the first is
+the fixed main.st, the second is the fixed tests.st.
