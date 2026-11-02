@@ -10,8 +10,6 @@ real buttons, and checks the lamps and servo arm with a camera. When a test
 fails it tells you whether the program is wrong or the wiring is.
 
 > 🎬 Demo video (< 3 min): **[link TBD — upload and paste URL]**
-> ![demo](docs/demo.gif)
-> *GIF TBD — record the dashboard during the rehearsal in `dashboard/DEMO.md`.*
 
 ## How it works
 

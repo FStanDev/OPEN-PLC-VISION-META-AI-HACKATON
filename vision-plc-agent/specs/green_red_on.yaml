@@ -1,0 +1,124 @@
+task_id: green_red_on
+description: >
+  When start is pressed, latch the green lamp on and move the servo to 180 degrees.
+  Stop turns everything off, leaving the yellow lamp on for 1 second and then the
+  red lamp on for 3 seconds, returning the servo to its original position.
+signals:
+- start_btn
+- stop_btn
+- lamp_red
+- lamp_green
+- lamp_yellow
+- arm_angle
+tests:
+- name: start_latches_green_arm
+  stimulus:
+  - at_ms: 0
+    press: start_btn
+    release: null
+  - at_ms: 200
+    press: null
+    release: start_btn
+  expect:
+  - signal: lamp_green
+    value: true
+    within_ms: 1000
+    at_ms: null
+    tolerance: null
+    tolerance_ms: null
+  - signal: arm_angle
+    value: 180
+    within_ms: 1500
+    at_ms: null
+    tolerance: 10.0
+    tolerance_ms: null
+- name: stop_yellow_timing
+  stimulus:
+  - at_ms: 0
+    press: start_btn
+    release: null
+  - at_ms: 200
+    press: null
+    release: start_btn
+  - at_ms: 1000
+    press: stop_btn
+    release: null
+  - at_ms: 1200
+    press: null
+    release: stop_btn
+  expect:
+  - signal: lamp_green
+    value: false
+    within_ms: 1500
+    at_ms: null
+    tolerance: null
+    tolerance_ms: null
+  - signal: lamp_yellow
+    value: true
+    within_ms: null
+    at_ms: 1700
+    tolerance: null
+    tolerance_ms: null
+  - signal: lamp_yellow
+    value: false
+    within_ms: null
+    at_ms: 3700
+    tolerance: null
+    tolerance_ms: null
+  - signal: arm_angle
+    value: 0
+    within_ms: null
+    at_ms: 3700
+    tolerance: 10.0
+    tolerance_ms: null
+  - signal: lamp_red
+    value: false
+    within_ms: null
+    at_ms: 6000
+    tolerance: null
+    tolerance_ms: null
+- name: stop_red_timing
+  stimulus:
+  - at_ms: 0
+    press: start_btn
+    release: null
+  - at_ms: 200
+    press: null
+    release: start_btn
+  - at_ms: 1000
+    press: stop_btn
+    release: null
+  - at_ms: 1200
+    press: null
+    release: stop_btn
+  expect:
+  - signal: lamp_yellow
+    value: true
+    within_ms: null
+    at_ms: 1700
+    tolerance: null
+    tolerance_ms: null
+  - signal: lamp_red
+    value: true
+    within_ms: null
+    at_ms: 3700
+    tolerance: null
+    tolerance_ms: null
+  - signal: arm_angle
+    value: 0
+    within_ms: null
+    at_ms: 3700
+    tolerance: 10.0
+    tolerance_ms: null
+  - signal: lamp_red
+    value: false
+    within_ms: null
+    at_ms: 6000
+    tolerance: null
+    tolerance_ms: null
+  - signal: lamp_yellow
+    value: false
+    within_ms: null
+    at_ms: 6000
+    tolerance: null
+    tolerance_ms: null
