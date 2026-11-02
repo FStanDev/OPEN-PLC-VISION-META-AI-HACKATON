@@ -1,0 +1,30 @@
+task_id: demo_task
+description: When start is pressed, latch the green lamp on and the servo it's at
+  180 degrees. Stop turns everything off.
+signals:
+- start_btn
+- stop_btn
+- lamp_green
+- arm_angle
+tests:
+- name: start_latches_lamp
+  stimulus:
+  - at_ms: 0
+    press: start_btn
+    release: null
+  - at_ms: 200
+    press: null
+    release: start_btn
+  expect:
+  - signal: lamp_green
+    value: true
+    within_ms: 500
+    at_ms: null
+    tolerance: null
+    tolerance_ms: null
+  - signal: arm_angle
+    value: 180
+    within_ms: 1500
+    at_ms: null
+    tolerance: 10.0
+    tolerance_ms: null

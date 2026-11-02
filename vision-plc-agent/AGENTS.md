@@ -26,13 +26,13 @@ One developer, limited evening hours: prefer the simplest thing that works.
 ## Architecture
 
 - **Laptop** (`agent/`, `dashboard/`, `tests/`): Python agent loop, STruC++ CLI,
-  dashboard. Talks to the Pi over Tailscale.
+  dashboard. Talks to the Pi over the local network.
 - **Pi** (`pi/`): OpenPLC Runtime v4 (native install, REST API on 8443, Modbus TCP),
   `pi/gpio_plugin` (OpenPLC Python plugin: I/O image to GPIO + PCA9685),
   `pi/stimulus_service` (presses buttons via GPIO26/GPIO13),
   `pi/frame_service` (C920 still frames + MJPEG preview).
-- **Pi access:** `ssh raspberrypi` (SSH config over Tailscale). Agent reaches all
-  Pi services at the Pi's Tailscale address.
+- **Pi access:** `ssh raspberrypi` (SSH config alias). Agent reaches all Pi
+  services at the Pi's IP address (set the URLs in `.env`).
 - Loop: spec → ST + ST tests → `strucpp` compile and test → human approve →
   package and deploy → stimulus → read tags (Modbus) + grab frames → SAM 3.1
   masks → measure → diagnose → repair (max 3) or hand back.
@@ -68,7 +68,7 @@ Change `io_map.yaml` first, then code. Never hard-code pins or addresses elsewhe
 2. Clamp `arm_angle` to 0–180 in the GPIO plugin; force outputs off when the PLC stops.
 3. Every generated program: `stop_btn` drives all outputs safe (lamps off, arm 0) in one scan.
 4. Touch only pins in `io_map.yaml`. Nothing runs as root except the OpenPLC runtime.
-5. Secrets only in `.env` (never committed). Bind Pi services to the Tailscale address.
+5. Secrets only in `.env` (never committed). Pi services may bind 0.0.0.0 on the private network.
 6. Never fake results: failed measurement = "inconclusive". No hard-coded expected
    values in vision code.
 

@@ -563,3 +563,42 @@ def test_preview_backs_off_after_camera_failure(tmp_path: Path) -> None:
     state.frames_url = "http://unused.invalid"
     blob, _, source = state.live_frame()  # within the back-off: no network call
     assert source == "none" and blob == PLACEHOLDER_PNG
+
+
+def _plc_state(tmp_path: Path):
+    from agent.plc_client import FakePlcClient
+    from agent.tag_writer import FakeTagWriter
+
+    plc, writer = FakePlcClient(), FakeTagWriter()
+    hosts: list[str] = []
+    state = DashboardState(tmp_path / "runs", None, pi_host="10.0.0.7")
+
+    def factory(host: str):
+        hosts.append(host)
+        return plc, writer
+
+    state.plc_factory = factory
+    return state, plc, writer, hosts
+
+
+def test_plc_start_stop_status(tmp_path: Path) -> None:
+    state, plc, writer, hosts = _plc_state(tmp_path)
+    assert state.plc_control("start", "") == (200, {"running": True, "pi_host": "10.0.0.7"})
+    status, payload = state.plc_control("stop", "10.0.0.9")
+    assert status == 200 and payload["running"] is False
+    assert ("lamp_red", False) in writer.writes and ("arm_angle", 0) in writer.writes
+    assert state.plc_control("status", "")[1]["running"] is False
+    assert hosts == ["10.0.0.7", "10.0.0.9", "10.0.0.7"]
+
+
+def test_plc_control_rejects_bad_input_and_reports_errors(tmp_path: Path) -> None:
+    state, _, _, _ = _plc_state(tmp_path)
+    assert state.plc_control("reboot", "")[0] == 400
+    assert state.plc_control("start", "evil/x")[0] == 400
+
+    def broken(host: str):
+        raise OSError("no route to host")
+
+    state.plc_factory = broken
+    status, payload = state.plc_control("status", "")
+    assert status == 502 and "no route" in str(payload["error"])

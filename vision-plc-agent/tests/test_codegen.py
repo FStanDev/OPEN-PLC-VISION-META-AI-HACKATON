@@ -104,11 +104,11 @@ def test_render_io_table_only_spec_signals(spec_and_map: tuple[TaskSpec, IoMap])
 
 
 def test_all_prompts_render() -> None:
-    plan = load_prompt("plan_v1.txt").substitute(spec_yaml="s", io_table="t", safe_state="z")
-    codegen = load_prompt("codegen_v1.txt").substitute(
+    plan = load_prompt("plan_v2.txt").substitute(spec_yaml="s", io_table="t", safe_state="z")
+    codegen = load_prompt("codegen_v2.txt").substitute(
         spec_yaml="s", io_table="t", diagram="d", fewshot_main="m", fewshot_tests="u"
     )
-    repair = load_prompt("repair_v1.txt").substitute(
+    repair = load_prompt("repair_v2.txt").substitute(
         round=2,
         max_rounds=3,
         spec_yaml="s",

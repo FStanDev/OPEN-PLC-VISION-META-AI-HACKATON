@@ -410,12 +410,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if "PI_BIND" not in os.environ:
-        print(
-            "[frames] WARNING: PI_BIND unset, binding 0.0.0.0 — "
-            "set it to the Pi's Tailscale IP in production.",
-            flush=True,
-        )
     device = args.device or default_device()
     grabber = Cv2Grabber(
         device,

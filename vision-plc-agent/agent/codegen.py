@@ -161,7 +161,7 @@ def _fewshot(name: str) -> str:
 
 def plan_diagram(spec: TaskSpec, io_map: IoMap, llm: LlmBackend) -> tuple[str, LlmReply]:
     """Step 1: Mermaid behaviour plan for the spec."""
-    prompt = load_prompt("plan_v1.txt").substitute(
+    prompt = load_prompt("plan_v2.txt").substitute(
         spec_yaml=render_spec_yaml(spec),
         io_table=render_io_table(spec, io_map),
         safe_state=render_safe_state(spec, io_map),
@@ -174,7 +174,7 @@ def generate_program(
     spec: TaskSpec, io_map: IoMap, diagram: str, llm: LlmBackend
 ) -> tuple[ProgramFiles, LlmReply]:
     """Step 2: ST program + ST tests from spec, I/O map and plan."""
-    prompt = load_prompt("codegen_v1.txt").substitute(
+    prompt = load_prompt("codegen_v2.txt").substitute(
         spec_yaml=render_spec_yaml(spec),
         io_table=render_io_table(spec, io_map),
         diagram=diagram,
@@ -196,7 +196,7 @@ def repair_program(
     max_rounds: int,
 ) -> tuple[ProgramFiles, LlmReply]:
     """Step 3: fix ``files`` given verbatim STruC++ errors (cheap effort)."""
-    prompt = load_prompt("repair_v1.txt").substitute(
+    prompt = load_prompt("repair_v2.txt").substitute(
         round=round,
         max_rounds=max_rounds,
         spec_yaml=render_spec_yaml(spec),

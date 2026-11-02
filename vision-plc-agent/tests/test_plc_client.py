@@ -44,6 +44,10 @@ def make_transport(state: dict[str, Any], calls: list[tuple[str, str]]) -> httpx
                 return httpx.Response(
                     200, json={"status": "STATUS:RUNNING", "switchPosition": "run"}
                 )
+            if state.get("status_mode") == "v4-stopped":
+                return httpx.Response(
+                    200, json={"status": "STATUS:STOPPED", "switchPosition": "run"}
+                )
             return httpx.Response(
                 200,
                 json={"running": state["running"], "compilation_status": state["compile"][-1]},
@@ -161,3 +165,12 @@ def test_status_rejects_unexpected_reply() -> None:
     plc.login("admin", "secret")
     with pytest.raises(PlcError, match="unexpected reply"):
         plc.status()
+
+
+def test_status_stopped_wins_over_switch_position() -> None:
+    """After an API stop v4.3.1 answers STATUS:STOPPED with switchPosition still "run"."""
+    state = fresh_state()
+    state["status_mode"] = "v4-stopped"
+    plc = make_client(state, [])
+    plc.login("admin", "secret")
+    assert plc.status().running is False

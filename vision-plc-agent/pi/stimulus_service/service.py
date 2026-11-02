@@ -112,12 +112,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fake-gpio", action="store_true", help="no hardware (debug only)")
     args = parser.parse_args(argv)
 
-    if "PI_BIND" not in os.environ:
-        print(
-            "[stimulus] WARNING: PI_BIND unset, binding 0.0.0.0 — "
-            "set it to the Pi's Tailscale IP in production.",
-            flush=True,
-        )
     if args.fake_gpio:
         gpio: GpioBackend = FakeGpio()
     else:

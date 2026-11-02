@@ -22,6 +22,7 @@ from agent.loop import (
     run_one_expectation,
     run_physical_test,
     run_stimulus_timeline,
+    should_leave_running,
     values_match,
     with_pi_host,
 )
@@ -402,8 +403,10 @@ def test_run_loop_full_pass(tmp_path: Path) -> None:
     assert report.passed is True and report.overall_verdict == "pass"
     assert report.approved and report.deployed and report.logic_fixes_used == 0
     assert plc.uploads == [b"zip"]
-    assert plc.status().running is False  # safe-state forced after the run
-    assert ("lamp_red", False) in writer.writes
+    # Logic proven right: the program stays live on the rig after the run.
+    assert plc.status().running is True and report.plc_left_running is True
+    assert writer.writes == []
+    assert "PLC left running" in report.summary
     run_dir = tmp_path / "run"
     for name in (
         "spec.yaml",
@@ -633,6 +636,8 @@ def test_run_loop_physical_fault_stops_without_repair(tmp_path: Path) -> None:
     assert report.overall_verdict == "physical_fault"
     assert report.logic_fixes_used == 0 and len(plc.uploads) == 1
     assert "wiring" in report.summary
+    assert plc.status().running is False and report.plc_left_running is False
+    assert "PLC stopped" in report.summary
 
 
 def test_deploy_real_rejects_failed_packaging(tmp_path: Path) -> None:
@@ -688,3 +693,35 @@ def test_with_pi_host_rejects_bad_host() -> None:
     for bad in ("", "a b", "x/y", "h:80", "-x"):
         with pytest.raises(ValueError):
             with_pi_host("http://old:1", bad, "")
+
+
+def _result(tag_match: bool, verdict: Verdict):
+    from agent.diagnose import Diagnosis
+    from agent.loop import ExpectationResult
+
+    return ExpectationResult(
+        test="t",
+        signal="lamp_red",
+        expected=True,
+        tag_value=tag_match,
+        tag_match=tag_match,
+        vision_entry={},
+        tags_match_camera=False,
+        vision_confidence=0.0,
+        diagnosis=Diagnosis(verdict=verdict, action=""),
+    )
+
+
+def test_should_leave_running_only_when_tags_match_and_no_fault() -> None:
+    from agent.loop import PhysicalTestResult
+
+    def run(*exps):
+        return [PhysicalTestResult(name="t", expectations=tuple(exps))]
+
+    ok = _result(True, Verdict.PASS)
+    unsure = _result(True, Verdict.VISION_INCONCLUSIVE)
+    assert should_leave_running(run(ok, unsure)) is True
+    assert should_leave_running(run(ok, _result(True, Verdict.PHYSICAL_FAULT))) is False
+    assert should_leave_running(run(ok, _result(False, Verdict.VISION_INCONCLUSIVE))) is False
+    assert should_leave_running(run(ok, _result(False, Verdict.LOGIC_BUG))) is False
+    assert should_leave_running([]) is False

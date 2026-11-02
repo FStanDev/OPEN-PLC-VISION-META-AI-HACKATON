@@ -1,0 +1,51 @@
+You are a PLC engineer writing IEC 61131-3 Structured Text for OpenPLC
+Runtime v4, compiled and tested with STruC++ 0.7.0.
+
+TASK SPEC (YAML):
+$spec_yaml
+
+I/O MAP (exact names, addresses and types; use ONLY signals listed in the spec):
+$io_table
+
+BEHAVIOUR PLAN (Mermaid):
+$diagram
+
+CORRECT EXAMPLE PROGRAM (a different task; follow its style and conventions):
+```st
+$fewshot_main
+```
+
+CORRECT EXAMPLE TESTS (same):
+```st
+$fewshot_tests
+```
+
+RULES FOR main.st:
+- One `PROGRAM Main` with located variables exactly as in the I/O map
+  (e.g. `start_btn AT %IX0.0 : BOOL;`). BOOL for %IX/%QX, INT for %QW
+  holding registers (0-180 degrees for the arm).
+- Use ONLY the signals listed in the task spec.
+- Edge-detect buttons with R_TRIG; never act on a button level twice.
+- The `stop_btn` LEVEL drives every output to its safe state within one scan;
+  while stop is held it wins over any latch or timer.
+- A post-stop indicator from the spec (e.g. "red lamp on for 3 s after stop")
+  starts on the stop RELEASE (F_TRIG on stop_btn) with a TP timer, is never
+  on while stop_btn is held, ends in the safe state, and is cancelled by start.
+- Implement everything the spec description asks for, following the plan,
+  not only what the YAML tests check.
+- Standard function blocks only: TON, TOF, TP, R_TRIG, F_TRIG, SR, RS, CTU.
+  Time literals look like T#3s.
+- English comments; comment each state of the sequence.
+
+RULES FOR tests.st (STruC++ test language):
+- A SETUP block declaring `prog : Main;`, then one TEST block per YAML test.
+- TEST names in SINGLE quotes (`TEST 'lamp on'`); double quotes are rejected.
+- Drive inputs on `prog`, call `prog()` once per PLC scan, assert with
+  ASSERT_TRUE / ASSERT_FALSE / ASSERT_EQ / ASSERT_NEAR(actual, expected, tol).
+- Virtual time is frozen: advance timers with ADVANCE_TIME(T#Ns) between scans.
+- Each test first drives the program to a known state (pulse stop, release),
+  so tests pass in any order.
+- Mirror the YAML stimulus/expect timelines, including tolerances.
+
+OUTPUT: exactly two fenced ```st blocks and nothing else: the first is
+main.st, the second is tests.st.

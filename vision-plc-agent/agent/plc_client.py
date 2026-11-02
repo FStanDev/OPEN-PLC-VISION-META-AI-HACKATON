@@ -169,11 +169,14 @@ class RestPlcClient(PlcClient):
         status_text = str(data.get("status", "")).lower()
         if status_text.startswith("status:"):
             status_text = status_text[len("status:") :]
-        running = (
-            bool(data.get("running", False))
-            or status_text in {"running", "started", "on"}
-            or str(data.get("switchPosition", "")).lower() in {"run", "running"}
-        )
+        # The runtime state wins; switchPosition is only the requested mode
+        # (it stays "run" after a stop, observed 2026-11-02).
+        if "running" in data:
+            running = bool(data["running"])
+        elif status_text:
+            running = status_text in {"running", "started", "on"}
+        else:
+            running = str(data.get("switchPosition", "")).lower() in {"run", "running"}
         compile_state = str(data.get("compilation_status", data.get("compile_state", "NONE")))
         return PlcStatus(running=running, compile_state=compile_state)
 

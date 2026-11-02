@@ -42,7 +42,7 @@ class ModbusTagWriter(TagWriter):
     """Real writer over Modbus TCP (coils and holding registers only).
 
     Args:
-        host: Pi Tailscale name or address.
+        host: Pi IP address or resolvable hostname.
         port: Modbus TCP port (check the Editor project; often 502).
         io_map: signal → table/address mapping.
         device_id: Modbus unit id.

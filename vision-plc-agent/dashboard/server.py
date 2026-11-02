@@ -24,6 +24,7 @@ import re
 import threading
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -33,8 +34,16 @@ import yaml
 
 from agent.dotenv import load_dotenv
 from agent.io_map import load_io_map
-from agent.loop import PI_HOST_RE, PI_URL_DEFAULTS, RUN_ID_FORMAT, with_pi_host
+from agent.loop import (
+    PI_HOST_RE,
+    PI_URL_DEFAULTS,
+    RUN_ID_FORMAT,
+    force_safe_state,
+    with_pi_host,
+)
+from agent.plc_client import PlcClient, PlcError, RestPlcClient
 from agent.spec import TaskSpec, check_against_io_map
+from agent.tag_writer import ModbusTagWriter, TagWriter
 
 INDEX_PATH = Path(__file__).resolve().parent / "index.html"
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -181,6 +190,28 @@ def unified_diff(old: str, new: str, name: str) -> str:
     )
 
 
+# Builds a logged-in PLC client and a Modbus writer for the given Pi host.
+PlcFactory = Callable[[str], tuple[PlcClient, TagWriter]]
+
+
+def real_plc_factory(io_map_path: str | Path | None) -> PlcFactory:
+    """PLC + writer from .env (OPENPLC_*, PI_HOST, MODBUS_PORT), host overridable."""
+
+    def build(pi_host: str) -> tuple[PlcClient, TagWriter]:
+        url = os.environ.get("OPENPLC_URL", "").strip()
+        if pi_host:
+            url = with_pi_host(url, pi_host, PI_URL_DEFAULTS["OPENPLC_URL"])
+        if not url:
+            raise PlcError("OPENPLC_URL not set and no Pi address given")
+        plc = RestPlcClient(url, timeout_s=10.0)
+        plc.login(os.environ.get("OPENPLC_USER", ""), os.environ.get("OPENPLC_PASSWORD", ""))
+        host = pi_host or os.environ.get("PI_HOST", "").strip()
+        port = int(os.environ.get("MODBUS_PORT", "5020") or 5020)
+        return plc, ModbusTagWriter(host, port, load_io_map(io_map_path))
+
+    return build
+
+
 def _short_error(exc: BaseException) -> str:
     text = str(exc).strip() or type(exc).__name__
     if len(text) > ERROR_TAIL_CHARS:
@@ -203,6 +234,7 @@ class DashboardState:
         self.pi_host = pi_host
         self.calibration = calibration
         self._live_retry_at = 0.0  # monotonic time before which live grabs are skipped
+        self.plc_factory: PlcFactory = real_plc_factory(io_map_path)
         self.specs_dir = Path(specs_dir) if specs_dir is not None else None
         self.io_map_path = io_map_path
         self._lock = threading.Lock()
@@ -391,6 +423,37 @@ class DashboardState:
         finally:
             job["finished_at"] = datetime.now(UTC).isoformat()
 
+    def plc_control(self, action: str, pi_host: str) -> tuple[int, dict[str, object]]:
+        """Status / start / stop the PLC by hand (outside runs)."""
+        if action not in ("status", "start", "stop"):
+            return 400, {"error": "action must be status, start or stop"}
+        pi_host = (pi_host or "").strip() or self.pi_host
+        if pi_host and not PI_HOST_RE.fullmatch(pi_host):
+            return 400, {"error": "pi_host must be an IP address or hostname"}
+        busy = self.active_run()
+        if action != "status" and busy is not None:
+            return 409, {"error": f"run {busy} owns the PLC; wait for it to finish"}
+        plc: PlcClient | None = None
+        writer: TagWriter | None = None
+        try:
+            plc, writer = self.plc_factory(pi_host)
+            if action == "start":
+                plc.start()
+            elif action == "stop":
+                # Same handback as a failed run: stop, then outputs to safe state.
+                force_safe_state(load_io_map(self.io_map_path), plc, writer)
+            return 200, {"running": plc.status().running, "pi_host": pi_host}
+        except Exception as exc:  # unreachable Pi, bad login: report, never raise
+            return 502, {"error": _short_error(exc)}
+        finally:
+            for client in (plc, writer):
+                close = getattr(client, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        pass
+
     def approve(self, run_dir: Path, by: str) -> tuple[int, dict[str, object]]:
         with self._lock:
             if not (run_dir / "pending_approval.json").is_file():
@@ -501,6 +564,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             pending = [r for r in self.state.list_runs() if r.get("pending_approval")]
             self._send_json(200, {"pending": pending})
             return
+        if path == "/api/plc":
+            host = parse_qs(parsed.query).get("pi_host", [""])[0]
+            status, payload = self.state.plc_control("status", host)
+            self._send_json(status, payload)
+            return
         if path == "/api/config":
             self._send_json(200, {"pi_host": self.state.pi_host})
             return
@@ -578,6 +646,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "invalid JSON"})
                 return
             status, payload = self.state.create_task(body)
+            self._send_json(status, payload)
+            return
+        if parsed.path == "/api/plc":
+            body = self._read_json_body()
+            if not isinstance(body, dict):
+                self._send_json(400, {"error": "invalid JSON"})
+                return
+            action = body.get("action")
+            host = body.get("pi_host")
+            status, payload = self.state.plc_control(
+                action if isinstance(action, str) else "",
+                host if isinstance(host, str) else "",
+            )
             self._send_json(status, payload)
             return
         if parsed.path == "/api/runs/start":

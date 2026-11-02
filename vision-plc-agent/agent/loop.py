@@ -174,6 +174,7 @@ class RunReport:
     output_tokens: int = 0
     tests: list[PhysicalTestResult] = field(default_factory=list)
     summary: str = ""
+    plc_left_running: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -190,6 +191,7 @@ class RunReport:
             "codegen": self.codegen,
             "tests": [t.to_dict() for t in self.tests],
             "summary": self.summary,
+            "plc_left_running": self.plc_left_running,
         }
 
 
@@ -680,6 +682,21 @@ def _overall_verdict(tests: list[PhysicalTestResult]) -> str:
     return Verdict.LOGIC_BUG.value
 
 
+def should_leave_running(tests: list[PhysicalTestResult]) -> bool:
+    """Keep the PLC running after the run when the logic is proven right.
+
+    Every tag matched the spec and nothing points at wiring (no physical
+    fault, no unclear): a pass, or a pass the camera could not confirm.
+    Anything else stops the PLC and forces the safe state.
+    """
+    expectations = [e for t in tests for e in t.expectations]
+    if not expectations or not all(e.tag_match for e in expectations):
+        return False
+    return not any(
+        e.diagnosis.verdict in (Verdict.PHYSICAL_FAULT, Verdict.UNCLEAR) for e in expectations
+    )
+
+
 def _summarise(report: RunReport, spec: TaskSpec) -> str:
     total = sum(len(t.expectations) for t in report.tests)
     passed = sum(
@@ -705,6 +722,12 @@ def _summarise(report: RunReport, spec: TaskSpec) -> str:
         lines.append("ST repaired and re-tested; inspect the diff if fixes ran out.")
     elif report.overall_verdict in (Verdict.UNCLEAR.value, Verdict.VISION_INCONCLUSIVE.value):
         lines.append("Handing back to the human; see report.json and frames/.")
+    if report.deployed:
+        lines.append(
+            "PLC left running (logic matched the spec)."
+            if report.plc_left_running
+            else "PLC stopped, outputs forced safe."
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -820,6 +843,7 @@ def run_loop(
 
     # Steps 6-10: calibrate once (caller-supplied), test, diagnose, repair.
     physical_repairs: list[dict[str, object]] = []
+    finished = False  # True only when the test loop ends normally (no exception)
     try:
         while True:
             tests: list[PhysicalTestResult] = []
@@ -898,11 +922,14 @@ def run_loop(
                 _write_run_files(run_dir, spec, files, report, calibration)
                 return report
             write_status(run_dir, "testing")
+        finished = True
     finally:
-        try:
-            force_safe_state(io_map, plc, writer, spec.signals)
-        except Exception:
-            pass
+        report.plc_left_running = finished and should_leave_running(report.tests)
+        if not report.plc_left_running:
+            try:
+                force_safe_state(io_map, plc, writer, spec.signals)
+            except Exception:
+                pass
     report.codegen["physical_repairs"] = physical_repairs
     report.summary = _summarise(report, spec)
     write_status(run_dir, "done", verdict=report.overall_verdict)

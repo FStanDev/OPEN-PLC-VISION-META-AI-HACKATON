@@ -30,7 +30,7 @@ cd ~/Developer/vision-plc-agent
 python3 -m venv .venvs/frames
 .venvs/frames/bin/pip install -r pi/frame_service/requirements.txt
 # --device defaults to /dev/v4l/by-id/*C920*-video-index0 (its /dev/videoN moves)
-PI_BIND=<tailscale-ip> .venvs/frames/bin/python pi/frame_service/service.py
+.venvs/frames/bin/python pi/frame_service/service.py
 ```
 
 Smoke test from the laptop:

@@ -41,7 +41,7 @@ class ModbusTagReader(TagReader):
     """Real reader over Modbus TCP.
 
     Args:
-        host: Pi Tailscale name or address.
+        host: Pi IP address or resolvable hostname.
         port: Modbus TCP port (must match conf/modbus_slave.json; packager default 5020).
         io_map: signal → table/address mapping.
         device_id: Modbus unit id.

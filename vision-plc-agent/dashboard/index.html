@@ -121,6 +121,15 @@
       <span id="taskMsg" class="muted"></span>
     </section>
     <section>
+      <h2>PLC</h2>
+      <div class="row">
+        <span id="plcState" class="chip">unknown</span>
+        <button id="plcStart" type="button">Start PLC</button>
+        <button id="plcStop" type="button">Stop PLC (outputs safe)</button>
+        <span id="plcMsg" class="muted"></span>
+      </div>
+    </section>
+    <section>
       <h2>Camera (live / last run)</h2>
       <img id="live" alt="camera preview">
       <div class="row" style="margin-top:6px"><span id="liveSrc" class="chip">—</span></div>
@@ -409,6 +418,26 @@ const EXAMPLE_TESTS = `- name: start_latches_lamp
 const EXAMPLE_SIGNALS = ["start_btn", "stop_btn", "lamp_red", "arm_angle"];
 let following = null;
 
+async function plcAction(action) {
+  const msg = $("plcMsg");
+  const chip = $("plcState");
+  const piHost = $("piHost").value.trim();
+  msg.textContent = action === "status" ? "" : `${action}…`;
+  try {
+    const res = action === "status"
+      ? await fetch(`/api/plc?pi_host=${encodeURIComponent(piHost)}`)
+      : await fetch("/api/plc", {method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({action, pi_host: piHost})});
+    const data = await res.json();
+    if (!res.ok) { chip.textContent = "unreachable"; chip.className = "chip"; msg.textContent = data.error; return; }
+    chip.textContent = data.running ? "running" : "stopped";
+    chip.className = "chip " + (data.running ? "pass" : "info");
+    msg.textContent = "";
+  } catch (e) { chip.textContent = "unreachable"; chip.className = "chip"; }
+}
+$("plcStart").onclick = () => plcAction("start");
+$("plcStop").onclick = () => plcAction("stop");
+
 async function loadPiHost() {
   // Last address typed here wins; otherwise the server default ($PI_HOST).
   let saved = "";
@@ -538,9 +567,10 @@ $("codeTabs").querySelectorAll("button").forEach((b) => {
 });
 loadRuns();
 loadIoMap();
-loadPiHost();
+loadPiHost().then(() => plcAction("status"));
 setInterval(tickLive, 1000);
 setInterval(loadRuns, 15000);
+setInterval(() => { if (!document.hidden) plcAction("status"); }, 10000);
 setInterval(pollFollowed, 2000);
 tickLive();
 </script>

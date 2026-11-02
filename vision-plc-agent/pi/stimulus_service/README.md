@@ -13,7 +13,7 @@ cd ~/Developer/vision-plc-agent
 sudo apt install -y python3-lgpio   # gpiozero's Pi 5 pin factory (no pip wheel)
 python3 -m venv --system-site-packages .venvs/stimulus
 .venvs/stimulus/bin/pip install -r pi/stimulus_service/requirements.txt
-PI_BIND=<tailscale-ip> .venvs/stimulus/bin/python pi/stimulus_service/service.py
+.venvs/stimulus/bin/python pi/stimulus_service/service.py
 ```
 
 Smoke test from the laptop (replace the host):

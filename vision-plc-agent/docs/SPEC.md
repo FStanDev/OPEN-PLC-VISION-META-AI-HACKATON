@@ -77,10 +77,10 @@ The laptop runs the agent; the Pi runs the PLC; the agent judges every test from
 │  Vision and measurement       │          └────────┼─────────────────────────────┘
 │  (LED brightness, servo angle)│                   ▼
 └───────────────────────────────┘          Bench rig: 3 LEDs, servo, 2 buttons
-                                           C920 webcam on the Pi (frames over Tailscale)
+                                           C920 webcam on the Pi (frames over HTTP)    
 ```
 
-The agent deploys over REST and reads tags over Modbus TCP, the stimulus service presses buttons electrically, and the C920 on the Pi serves frames over Tailscale to the vision module, which calls SAM 3.1. Everything works from anywhere on the private network. The diagnosis step compares the two paths against the spec.
+The agent deploys over REST and reads tags over Modbus TCP, the stimulus service presses buttons electrically, and the C920 on the Pi serves frames over HTTP to the vision module, which calls SAM 3.1. Everything works from anywhere on the private network. The diagnosis step compares the two paths against the spec.
 
 ## Hardware bill of materials
 
@@ -120,7 +120,7 @@ This table is the contract between hardware, PLC code, the GPIO plugin, Modbus a
 
 **Pin ownership:** the OpenPLC GPIO plugin owns the PLC pins (inputs, LEDs, I2C). The stimulus service owns GPIO26 and GPIO13 only. Nothing else touches GPIO.
 
-**Camera:** the C920 plugs into a Pi USB port, on a tripod in front of the rig. A frame service on the Pi locks exposure, focus and white balance with `v4l2-ctl` at start-up and serves still frames (and an MJPEG preview for the dashboard) over Tailscale.
+**Camera:** the C920 plugs into a Pi USB port, on a tripod in front of the rig. A frame service on the Pi locks exposure, focus and white balance with `v4l2-ctl` at start-up and serves still frames (and an MJPEG preview for the dashboard) over HTTP.
 
 ## Software prerequisites
 
@@ -148,7 +148,7 @@ The agent runs on the laptop in Python; the Pi runs OpenPLC natively plus two sm
 - Plugin venv (`venvs/gpio_rig`) with `gpiozero`, `lgpio`, Adafruit `servokit`
 - `pi/.venv` for the stimulus and frame services (`lgpio`, `fastapi`, `uvicorn`, `opencv-python-headless`)
 
-**Remote development:** Tailscale on the Pi and personal devices only, SSH keys only, VS Code Remote-SSH, tmux. The agent on the laptop reaches the Pi's Tailscale address: REST on 8443, Modbus TCP, the stimulus service and the frame service.
+**Remote development:** personal devices on the home LAN only, SSH keys only, VS Code Remote-SSH, tmux. The agent on the laptop reaches the Pi's IP address: REST on 8443, Modbus TCP, the stimulus service and the frame service.
 
 **Python libraries (agent side)**
 
@@ -268,7 +268,7 @@ The product's AI (what runs inside the loop and what judges see) is always Meta 
 2. Servo limits are enforced twice: clamp `arm_angle` to 0–180 in the GPIO plugin, independent of PLC code. The plugin also forces all outputs off when the PLC is stopped.
 3. Every generated program has a stop path: `stop_btn` drives all outputs to their safe state (lamps off, arm 0) within one scan.
 4. Never touch GPIO pins outside the I/O map; never run anything as root except the runtime itself.
-5. Keep the rig on a private network (home LAN plus Tailscale only); no port forwarding; personal devices only; credentials in `.env`, never in git.
+5. Keep the rig on a private network (home LAN only); no port forwarding; personal devices only; credentials in `.env`, never in git.
 6. Never fake results: if a measurement fails, report it as inconclusive. No hard-coded expected values in vision code.
 7. No employer or proprietary material, ever.
 
