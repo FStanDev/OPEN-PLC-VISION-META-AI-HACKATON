@@ -1,0 +1,6 @@
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE: Safe - lamp_red=False, arm_angle=0
+    ACTIVE: lamp_red=True, arm_angle=90
+    IDLE --> ACTIVE: start_btn pressed
+    ACTIVE --> IDLE: stop_btn pressed
