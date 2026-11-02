@@ -105,6 +105,14 @@ Rehearsal checklist (including fault injection: pull an LED leg and watch the
 agent blame the wiring, not the code): [`dashboard/DEMO.md`](dashboard/DEMO.md).
 Video shot list: [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md).
 
+## Known limitations
+
+Bench vision calibration is the honest frontier: real-rig runs to date confirm
+PLC tags against the spec, with camera confirmation still being tuned per
+session (lighting, exposure lock, mask thresholds). The full vision path —
+SAM masks, measurement, three-way diagnosis — is exercised end to end in
+tests and fake runs.
+
 ## Layout
 
 ```text
