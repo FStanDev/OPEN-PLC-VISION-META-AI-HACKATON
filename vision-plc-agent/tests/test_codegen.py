@@ -258,3 +258,23 @@ def test_generate_with_repairs_rejects_bad_max_rounds(
             workdir=tmp_path,
             max_rounds=0,
         )
+
+
+def test_generate_with_repairs_snapshots_each_attempt(
+    tmp_path: Path, spec_and_map: tuple[TaskSpec, IoMap]
+) -> None:
+    spec, io_map = spec_and_map
+    exe = _write_exe(tmp_path / "strucpp", FAIL_IF_MARKER)
+    llm = ScriptedLlmBackend(
+        [
+            "```mermaid\nstateDiagram-v2\n```",
+            _code_reply("MAIN", "SYNTAX_BAD"),
+            _code_reply("MAIN", "FIXED"),
+        ]
+    )
+    report = generate_with_repairs(spec, io_map, llm, workdir=tmp_path / "work", strucpp=str(exe))
+    assert report.passed and len(report.checks) == 2
+    attempts = tmp_path / "work" / "attempts"
+    assert (attempts / "attempt1" / "tests.st").read_text() == "SYNTAX_BAD\n"
+    assert (attempts / "attempt2" / "tests.st").read_text() == "FIXED\n"
+    assert (attempts / "attempt2" / "main.st").read_text() == "MAIN\n"

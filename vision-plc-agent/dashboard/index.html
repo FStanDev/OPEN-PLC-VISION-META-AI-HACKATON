@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vision PLC Agent — Dashboard</title>
+<style>
+  :root {
+    --bg: #eef0f2; --panel: #ffffff; --ink: #1c2026; --muted: #5b6470;
+    --line: #d7dbe0; --accent: #0f5fd0; --pass: #177245; --fail: #b3261e;
+    --warn: #8a5a00; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
+  header { background: #20262e; color: #f2f4f7; padding: 10px 16px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header select, header button { font-size: 13px; padding: 5px 8px; }
+  header .spacer { flex: 1; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; color: #fff; background: var(--muted); }
+  .chip.pass { background: var(--pass); } .chip.fail { background: var(--fail); }
+  .chip.warn { background: var(--warn); } .chip.info { background: var(--accent); }
+  #pending { display: none; background: #fff4d6; border-bottom: 1px solid #e3c76a;
+    padding: 10px 16px; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #pending.show { display: flex; }
+  #pending button { background: var(--pass); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  main { display: grid; grid-template-columns: minmax(340px, 5fr) minmax(400px, 7fr);
+    gap: 12px; padding: 12px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; margin-bottom: 12px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  #live { width: 100%; aspect-ratio: 4/3; object-fit: contain; background: #111;
+    border-radius: 6px; display: block; }
+  #frameStrip { display: flex; gap: 6px; overflow-x: auto; margin-top: 8px; }
+  #frameStrip img { height: 64px; cursor: pointer; border: 2px solid transparent;
+    border-radius: 4px; background: #111; }
+  #frameStrip img.sel { border-color: var(--accent); }
+  #frameView { width: 100%; margin-top: 8px; border-radius: 6px; background: #111; display: none; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tabs button { border: 1px solid var(--line); background: #f4f6f8; border-radius: 6px;
+    padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .tabs button.sel { background: #20262e; color: #fff; border-color: #20262e; }
+  pre.code { background: #20262e; color: #e8ecf1; padding: 10px; border-radius: 6px;
+    overflow: auto; max-height: 420px; font-family: var(--mono); font-size: 12px; margin: 0; }
+  pre.code .add { color: #7ee2a8; } pre.code .del { color: #ff9d94; }
+  pre.code .hunk { color: #9fc5ff; }
+  .test { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; }
+  .test > summary { padding: 8px 10px; cursor: pointer; font-weight: 600; }
+  .test table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .test th, .test td { text-align: left; padding: 5px 8px; border-top: 1px solid var(--line);
+    font-family: var(--mono); }
+  .test th { font-family: inherit; color: var(--muted); font-weight: 600; }
+  #summary { white-space: pre-wrap; font-family: var(--mono); font-size: 12px;
+    background: #f4f6f8; padding: 8px; border-radius: 6px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vision PLC Agent</h1>
+  <select id="runSel" title="Run"></select>
+  <button id="refreshBtn" type="button">Refresh</button>
+  <span class="spacer"></span>
+  <span id="verdict" class="chip">—</span>
+</header>
+<div id="pending">
+  <strong id="pendingText">Run awaiting approval</strong>
+  <button id="approveBtn" type="button">Approve &amp; deploy</button>
+  <span id="approveMsg" class="muted"></span>
+</div>
+<main>
+  <div>
+    <section>
+      <h2>Camera (live / last run)</h2>
+      <img id="live" alt="camera preview">
+      <div class="row" style="margin-top:6px"><span id="liveSrc" class="chip">—</span></div>
+    </section>
+    <section>
+      <h2>Test timeline</h2>
+      <div id="timeline"><span class="muted">No run selected.</span></div>
+    </section>
+    <section>
+      <h2>Summary</h2>
+      <div id="summary" class="muted">—</div>
+    </section>
+  </div>
+  <div>
+    <section>
+      <h2>Spec &amp; code</h2>
+      <div class="tabs" id="codeTabs">
+        <button data-view="spec" type="button">spec</button>
+        <button data-view="diagram" type="button">diagram</button>
+        <button data-view="main" type="button" class="sel">main.st</button>
+        <button data-view="tests" type="button">tests.st</button>
+      </div>
+      <div class="row">
+        <label class="muted" for="snapSel">snapshot</label>
+        <select id="snapSel"></select>
+      </div>
+      <pre class="code" id="codeView">—</pre>
+      <div id="mermaidView"></div>
+    </section>
+    <section>
+      <h2>ST diffs</h2>
+      <div class="row">
+        <select id="diffFrom"></select><span class="muted">→</span><select id="diffTo"></select>
+        <button id="diffBtn" type="button">Show diff</button>
+      </div>
+      <pre class="code" id="diffView">Pick two snapshots and press “Show diff”.</pre>
+    </section>
+    <section>
+      <h2>Recorded frames</h2>
+      <div id="frameStrip"></div>
+      <canvas id="frameView"></canvas>
+      <div id="frameInfo" class="muted"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let detail = null, codeViewName = "main";
+
+function verdictClass(v) {
+  v = (v || "").toLowerCase();
+  if (v === "pass") return "pass";
+  if (v === "logic_bug" || v === "physical_fault" || v === "deploy_failed") return "fail";
+  return "warn";
+}
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function loadRuns() {
+  const res = await fetch("/api/runs");
+  const data = await res.json();
+  const sel = $("runSel"), cur = sel.value;
+  sel.innerHTML = "";
+  for (const r of data.runs) {
+    const o = document.createElement("option");
+    o.value = r.run_id;
+    o.textContent = `${r.run_id} — ${r.verdict || "?"}`;
+    sel.appendChild(o);
+  }
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  if (sel.value) await loadDetail(sel.value);
+  const pend = await (await fetch("/api/pending")).json();
+  showPending(pend.pending);
+}
+
+function showPending(list) {
+  const bar = $("pending");
+  if (!list.length) { bar.classList.remove("show"); return; }
+  bar.classList.add("show");
+  const p = list[0];
+  $("pendingText").textContent =
+    `Run ${p.run_id} (${p.task_id || "?"}) awaits approval — ` +
+    `review the code, then approve to deploy.`;
+  $("approveBtn").onclick = async () => {
+    $("approveMsg").textContent = "sending…";
+    const res = await fetch(`/api/runs/${encodeURIComponent(p.run_id)}/approve`,
+      {method: "POST", headers: {"Content-Type": "application/json"},
+       body: JSON.stringify({by: "dashboard"})});
+    const out = await res.json();
+    $("approveMsg").textContent = out.approved ? "approved." : ("error: " + out.error);
+    if (out.approved) { bar.classList.remove("show"); await loadRuns(); }
+  };
+}
+
+async function loadDetail(runId) {
+  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
+  detail = await res.json();
+  renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
+  renderFrames();
+}
+
+function renderVerdict() {
+  const rep = detail.report, v = $("verdict");
+  const verdict = rep ? rep.verdict : detail.pending ? "awaiting_approval" : "?";
+  v.textContent = verdict;
+  v.className = "chip " + verdictClass(verdict);
+}
+
+function renderTimeline() {
+  const box = $("timeline"), rep = detail.report;
+  if (!rep || !rep.tests || !rep.tests.length) {
+    box.innerHTML = `<span class="muted">${detail.pending ? "Awaiting approval — no tests yet." : "No tests."}</span>`;
+    return;
+  }
+  box.innerHTML = "";
+  for (const t of rep.tests) {
+    const el = document.createElement("details");
+    el.className = "test"; el.open = true;
+    const rows = t.expectations.map((e) => {
+      const vis = e.vision || {};
+      const seen = vis.lit !== undefined ? ("lit=" + vis.lit)
+        : (vis.angle !== undefined ? ("angle=" + Math.round(vis.angle)) : (vis.status || "?"));
+      return `<tr><td>${esc(e.signal)}</td><td>${esc(JSON.stringify(e.expected))}</td>` +
+        `<td>${esc(JSON.stringify(e.tag_value))}</td><td>${esc(seen)}</td>` +
+        `<td><span class="chip ${verdictClass(e.verdict)}">${esc(e.verdict)}</span></td></tr>`;
+    }).join("");
+    el.innerHTML = `<summary>${esc(t.name)} — ${t.passed ? "pass" : "FAIL"}</summary>` +
+      `<table><tr><th>signal</th><th>expected</th><th>tag</th><th>camera</th><th>verdict</th></tr>${rows}</table>`;
+    box.appendChild(el);
+  }
+}
+
+function renderSummary() {
+  const rep = detail.report;
+  $("summary").textContent = detail.summary_txt ||
+    (detail.pending ? `Pending approval since ${detail.pending.at}.` : "—") +
+    (rep ? `\nmode=${rep.mode} approved=${rep.approved} deployed=${rep.deployed} ` +
+      `fixes=${rep.logic_fixes_used} tokens=${rep.input_tokens}/${rep.output_tokens}` : "");
+}
+
+function currentSnap() {
+  const id = $("snapSel").value;
+  return (detail.snapshots || []).find((s) => s.id === id) || (detail.snapshots || [])[0];
+}
+
+function renderSnapshots() {
+  const snaps = detail.snapshots || [];
+  for (const id of ["snapSel", "diffFrom", "diffTo"]) {
+    const sel = $(id); sel.innerHTML = "";
+    for (const s of snaps) {
+      const o = document.createElement("option");
+      o.value = s.id; o.textContent = s.label; sel.appendChild(o);
+    }
+  }
+  if (snaps.length > 1) { $("diffFrom").value = snaps[0].id; }
+  if (snaps.length) { $("snapSel").value = snaps[snaps.length - 1].id; $("diffTo").value = snaps[snaps.length - 1].id; }
+}
+
+function renderCode() {
+  const view = $("codeView"), mw = $("mermaidView");
+  mw.innerHTML = "";
+  if (codeViewName === "spec") {
+    const spec = detail.report ? null : detail.pending ? detail.pending.spec : null;
+    view.textContent = detail.spec_yaml || (spec ? JSON.stringify(spec, null, 2) : "—");
+    return;
+  }
+  if (codeViewName === "diagram") {
+    const src = detail.diagram || (detail.pending && detail.pending.diagram) || "";
+    view.textContent = src || "—";
+    if (src && window.mermaid) {
+      try {
+        mw.innerHTML = `<div class="mermaid">${esc(src)}</div>`;
+        window.mermaid.run({nodes: mw.querySelectorAll(".mermaid")});
+      } catch (e) { /* keep the text view */ }
+    }
+    return;
+  }
+  const s = currentSnap();
+  if (!s) {
+    const p = detail.pending || {};
+    view.textContent = (codeViewName === "main" ? p.main_st : p.tests_st) || "—";
+    return;
+  }
+  view.textContent = (codeViewName === "main" ? s.main_st : s.tests_st) || "—";
+}
+
+async function showDiff() {
+  const runId = $("runSel").value, from = $("diffFrom").value, to = $("diffTo").value;
+  const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/diff?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  const out = await res.json();
+  const view = $("diffView");
+  if (out.error) { view.textContent = out.error; return; }
+  let html = "";
+  for (const name of ["main.st", "tests.st"]) {
+    const text = out.diffs[name] || "";
+    html += `<span class="hunk">=== ${esc(name)} (${esc(from)} → ${esc(to)}) ===</span>\n`;
+    html += text ? esc(text).split("\n").map((l) =>
+      l.startsWith("+") && !l.startsWith("+++") ? `<span class="add">${l}</span>`
+      : l.startsWith("-") && !l.startsWith("---") ? `<span class="del">${l}</span>`
+      : l.startsWith("@") ? `<span class="hunk">${l}</span>` : l
+    ).join("\n") : "(identical)";
+    html += "\n";
+  }
+  view.innerHTML = html;
+}
+
+function renderFrames() {
+  const strip = $("frameStrip"); strip.innerHTML = "";
+  $("frameView").style.display = "none"; $("frameInfo").textContent = "";
+  for (const name of detail.frames || []) {
+    const img = document.createElement("img");
+    img.src = `/api/runs/${encodeURIComponent(detail.run_id)}/frames/${encodeURIComponent(name)}`;
+    img.alt = name; img.title = name;
+    img.onclick = () => {
+      strip.querySelectorAll("img").forEach((i) => i.classList.remove("sel"));
+      img.classList.add("sel"); showFrame(name);
+    };
+    strip.appendChild(img);
+  }
+  if (!strip.children.length) strip.innerHTML = `<span class="muted">No frames recorded.</span>`;
+}
+
+function boxesFor(name) {
+  const boxes = [], rep = detail.report;
+  if (!rep || !rep.tests) return boxes;
+  for (const t of rep.tests) for (const e of t.expectations) {
+    const b = e.vision && e.vision.bbox;
+    if (b && name.includes(e.signal)) boxes.push({signal: e.signal, bbox: b, verdict: e.verdict});
+  }
+  return boxes;
+}
+
+function showFrame(name) {
+  const canvas = $("frameView"), ctx = canvas.getContext("2d");
+  const img = new Image();
+  img.onload = () => {
+    canvas.width = img.width; canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    const boxes = boxesFor(name);
+    for (const {signal, bbox, verdict} of boxes) {
+      const [x0, y0, x1, y1] = bbox;
+      ctx.strokeStyle = verdict === "pass" ? "#34d17b" : "#ff6b61";
+      ctx.lineWidth = Math.max(2, img.width / 200);
+      ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.font = `${Math.max(12, img.height / 25)}px sans-serif`;
+      ctx.fillText(signal, x0 + 4, y0 > 16 ? y0 - 4 : y0 + 14);
+    }
+    canvas.style.display = "block";
+    $("frameInfo").textContent = boxes.length
+      ? `${name}: ${boxes.length} mask box(es) overlaid` : `${name}: no mask boxes recorded`;
+  };
+  img.src = `/api/runs/${encodeURIComponent(detail.run_id)}/frames/${encodeURIComponent(name)}`;
+}
+
+function tickLive() {
+  if (document.hidden) return;
+  const img = $("live");
+  fetch("/api/preview.jpg", {cache: "no-store"}).then(async (res) => {
+    const blob = await res.blob();
+    img.src = URL.createObjectURL(blob);
+    const src = res.headers.get("X-Frame-Source") || "?";
+    const badge = $("liveSrc");
+    badge.textContent = src === "live" ? "live camera" : src === "last-run" ? "last run frame" : "no camera";
+    badge.className = "chip " + (src === "live" ? "pass" : src === "last-run" ? "info" : "");
+  }).catch(() => {});
+}
+
+$("runSel").onchange = (e) => loadDetail(e.target.value);
+$("refreshBtn").onclick = loadRuns;
+$("snapSel").onchange = renderCode;
+$("diffBtn").onclick = showDiff;
+$("codeTabs").querySelectorAll("button").forEach((b) => {
+  b.onclick = () => {
+    $("codeTabs").querySelectorAll("button").forEach((x) => x.classList.remove("sel"));
+    b.classList.add("sel"); codeViewName = b.dataset.view; renderCode();
+  };
+});
+loadRuns();
+setInterval(tickLive, 1000);
+setInterval(loadRuns, 15000);
+tickLive();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+  onload="if(window.mermaid)mermaid.initialize({startOnLoad:false,theme:'neutral'})"></script>
+</body>
+</html>

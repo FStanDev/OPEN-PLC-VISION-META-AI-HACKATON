@@ -252,7 +252,9 @@ def generate_with_repairs(
         replies.append(plan_reply)
     files, reply = generate_program(spec, io_map, diagram, llm)
     replies.append(reply)
-    checks = [offline_check(files, workdir, strucpp=strucpp)]
+    root = Path(workdir)
+    checks = [offline_check(files, root, strucpp=strucpp)]
+    _snapshot_attempt(root, 1, files)
     attempt = 1
     while not checks[-1].passed and attempt < max_rounds:
         attempt += 1
@@ -266,7 +268,8 @@ def generate_with_repairs(
             max_rounds=max_rounds,
         )
         replies.append(reply)
-        checks.append(offline_check(files, workdir, strucpp=strucpp))
+        checks.append(offline_check(files, root, strucpp=strucpp))
+        _snapshot_attempt(root, attempt, files)
     return CodegenReport(
         task_id=spec.task_id,
         passed=checks[-1].passed,
@@ -276,6 +279,22 @@ def generate_with_repairs(
         input_tokens=sum(r.input_tokens for r in replies),
         output_tokens=sum(r.output_tokens for r in replies),
     )
+
+
+def _snapshot_attempt(workdir: Path, attempt: int, files: ProgramFiles) -> None:
+    """Keep per-attempt ST so the dashboard can diff repairs (M7).
+
+    ``offline_check`` rewrites ``main.st`` in place; without snapshots the
+    intermediate attempts are lost. Best effort: a snapshot failure must
+    never fail codegen.
+    """
+    try:
+        snap = workdir / "attempts" / f"attempt{attempt}"
+        snap.mkdir(parents=True, exist_ok=True)
+        (snap / "main.st").write_text(files.main_st, encoding="utf-8")
+        (snap / "tests.st").write_text(files.tests_st, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _tail(text: str) -> str:

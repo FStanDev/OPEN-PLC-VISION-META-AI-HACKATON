@@ -57,6 +57,9 @@ MAX_LOGIC_FIXES = 3
 POLL_INTERVAL_MS = 50
 FAKE_PROGRAM_ZIP = b"fake-program-zip: no packager in --fake mode"
 RUN_ID_FORMAT = "%Y%m%dT%H%M%SZ"
+PENDING_APPROVAL_FILE = "pending_approval.json"
+APPROVAL_FILE = "approved.json"
+APPROVAL_POLL_S = 1.0
 
 SleepFn = Callable[[float], None]
 NowMsFn = Callable[[], int]
@@ -485,6 +488,61 @@ def prompt_for_approval(files: ProgramFiles, diagram: str) -> bool:
     return answer == "approve"
 
 
+def write_pending_approval(
+    run_dir: Path, spec: TaskSpec, files: ProgramFiles, diagram: str
+) -> Path:
+    """Publish codegen output for the dashboard approve button (SPEC step 4).
+
+    The dashboard shows this file's content and writes :data:`APPROVAL_FILE`
+    when the human clicks approve. The full run files are still written by
+    :func:`run_loop` when the run finishes.
+    """
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pending = {
+        "run_id": run_dir.name,
+        "task_id": spec.task_id,
+        "at": datetime.now(UTC).isoformat(),
+        "spec": spec.model_dump(),
+        "diagram": diagram,
+        "main_st": files.main_st,
+        "tests_st": files.tests_st,
+    }
+    path = run_dir / PENDING_APPROVAL_FILE
+    path.write_text(json.dumps(pending, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def wait_for_dashboard_approval(
+    run_dir: Path,
+    spec: TaskSpec,
+    timeout_s: float,
+    *,
+    poll_s: float = APPROVAL_POLL_S,
+    sleep_fn: SleepFn = time.sleep,
+) -> ApproveFn:
+    """Build an :data:`ApproveFn` that waits for the dashboard button.
+
+    Writes :data:`PENDING_APPROVAL_FILE`, then polls for
+    :data:`APPROVAL_FILE` until ``timeout_s``. A timeout (or timeout <= 0
+    waited out immediately) means not approved: the loop never deploys
+    without the explicit click.
+    """
+
+    def _wait(files: ProgramFiles, diagram: str) -> bool:
+        write_pending_approval(run_dir, spec, files, diagram)
+        approved_path = Path(run_dir) / APPROVAL_FILE
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if approved_path.is_file():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            sleep_fn(min(poll_s, max(0.0, deadline - time.monotonic())))
+
+    return _wait
+
+
 def deploy_real(
     files: ProgramFiles,
     workdir: Path,
@@ -674,6 +732,12 @@ def run_loop(
     # Step 4: human approval before any deploy.
     approver = approve_fn if approve_fn is not None else prompt_for_approval
     report.approved = bool(approver(files, diagram))
+    approval_path = run_dir / APPROVAL_FILE
+    if report.approved and approval_path.is_file():
+        try:
+            report.codegen["approval"] = json.loads(approval_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
     if not report.approved:
         report.overall_verdict = "not_approved"
         report.summary = _summarise(report, spec)
@@ -836,6 +900,13 @@ def main(argv: list[str] | None = None) -> int:
         "--approve", action="store_true", help="explicit deploy approval (no prompt)"
     )
     parser.add_argument(
+        "--wait-approval",
+        type=float,
+        default=0.0,
+        metavar="SECS",
+        help="wait up to SECS for the dashboard approve button (0 = off)",
+    )
+    parser.add_argument(
         "--runs-dir", default="runs", help="parent dir for runs/<timestamp>-<task_id>"
     )
     parser.add_argument("--out", default=None, help="exact run dir (overrides --runs-dir)")
@@ -881,7 +952,13 @@ def main(argv: list[str] | None = None) -> int:
 
         # --fake uploads dummy bytes to an in-memory PLC: no hardware, so the
         # explicit --approve prompt is skipped (real mode still requires it).
-        print("fake mode: auto-approved (no real PLC)")
+        # --wait-approval still works in fake mode for dashboard demos.
+        if args.wait_approval > 0:
+            fake_approve: ApproveFn = wait_for_dashboard_approval(run_dir, spec, args.wait_approval)
+            print(f"fake mode: waiting up to {args.wait_approval:g}s for dashboard approval")
+        else:
+            fake_approve = lambda _f, _d: True  # noqa: E731
+            print("fake mode: auto-approved (no real PLC)")
         report = run_loop(
             spec,
             io_map,
@@ -898,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
             poll_interval_ms=args.poll_ms,
             min_vision_confidence=args.min_confidence,
             mode="fake",
-            approve_fn=lambda _f, _d: True,
+            approve_fn=fake_approve,
             deploy_fn=_fake_deploy,
             prepare_test_fn=lambda index, test: _prepare_fake_test(fake_tags, index, test),
             calibration=calibration,
@@ -974,7 +1051,11 @@ def main(argv: list[str] | None = None) -> int:
             poll_interval_ms=args.poll_ms,
             min_vision_confidence=args.min_confidence,
             mode="real",
-            approve_fn=(lambda _f, _d: True) if args.approve else None,
+            approve_fn=(
+                wait_for_dashboard_approval(run_dir, spec, args.wait_approval)
+                if args.wait_approval > 0
+                else ((lambda _f, _d: True) if args.approve else None)
+            ),
             deploy_fn=None,
             plc_username=openplc_user,
             plc_password=openplc_password,
