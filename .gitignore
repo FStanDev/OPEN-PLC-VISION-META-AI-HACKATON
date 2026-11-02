@@ -47,3 +47,6 @@ Thumbs.db
 test_i2c.py
 test_servo.py
 getToken.sh
+
+# Generated OpenWiki evidence index
+openwiki/

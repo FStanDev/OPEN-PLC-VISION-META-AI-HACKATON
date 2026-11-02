@@ -1,0 +1,27 @@
+# Hardware cross-check: start latches all three lamps on (arm stays home).
+# Stop turns everything off. Used to verify each lamp channel + vision
+# box assignment independently of the start_lamp_arm program.
+task_id: lamp_seq
+description: >
+  When start is pressed, latch the red, green and yellow lamps on.
+  Stop turns all lamps off. The arm is not driven by this program.
+signals: [start_btn, stop_btn, lamp_red, lamp_green, lamp_yellow]
+tests:
+  - name: start_latches_all_lamps
+    stimulus:
+      - {at_ms: 0, press: start_btn}
+      - {at_ms: 200, release: start_btn}
+    expect:
+      - {signal: lamp_red, value: true, within_ms: 500}
+      - {signal: lamp_green, value: true, within_ms: 500}
+      - {signal: lamp_yellow, value: true, within_ms: 500}
+  - name: stop_clears_all_lamps
+    stimulus:
+      - {at_ms: 0, press: start_btn}
+      - {at_ms: 200, release: start_btn}
+      - {at_ms: 1000, press: stop_btn}
+      - {at_ms: 1200, release: stop_btn}
+    expect:
+      - {signal: lamp_red, value: false, within_ms: 1500}
+      - {signal: lamp_green, value: false, within_ms: 1500}
+      - {signal: lamp_yellow, value: false, within_ms: 1500}

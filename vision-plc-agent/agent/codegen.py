@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from string import Template
 
 import yaml
 
+from agent.dotenv import load_dotenv as _load_dotenv
 from agent.io_map import IoMap, load_io_map
 from agent.llm_backend import LlmBackend, LlmReply, MetaLlmBackend, ScriptedLlmBackend
 from agent.spec import TaskSpec, check_against_io_map, load_task_spec
@@ -281,27 +281,6 @@ def generate_with_repairs(
 def _tail(text: str) -> str:
     text = text.strip()
     return text[-REPORT_TAIL_CHARS:] if len(text) > REPORT_TAIL_CHARS else text
-
-
-def _load_dotenv() -> None:
-    """Set missing env vars from ``.env`` in cwd or the project root (no dependency)."""
-    for directory in (Path.cwd(), Path(__file__).resolve().parent.parent):
-        env_file = directory / ".env"
-        if not env_file.is_file():
-            continue
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key, value = key.strip(), value.strip()
-            if not value.startswith(("'", '"')):  # unquoted: strip inline comments
-                value, _, _ = value.partition(" #")
-                value = value.rstrip()
-            else:
-                value = value.strip("'\"")
-            if key and key not in os.environ:
-                os.environ[key] = value
 
 
 def _fake_llm_for_plumbing() -> ScriptedLlmBackend:

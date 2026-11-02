@@ -42,7 +42,7 @@ signals:
     iec: "%QW0"
     range: [0, 180]          # degrees; clamped in the GPIO plugin
     modbus: {table: holding_register, address: 0}
-    pca9685: {channel: 1} # ch 0 output dead on this board (M3: regs ok, no pulse)
+    pca9685: {channel: 2} # ch 0 flaky, ch 1 output dead (M5: two drivers agree)
     vision: {prompt: "servo arm", measure: angle}
     optional: true           # MVP works without the servo
 

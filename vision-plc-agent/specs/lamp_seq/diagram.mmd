@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> off : power up
+    off --> on : start pressed
+    on --> off : stop pressed
+    on --> on : start pressed (stays latched)
+
+    note right of on
+        lamp_red, lamp_green, lamp_yellow on
+        stop forces all off in one scan
+    end note

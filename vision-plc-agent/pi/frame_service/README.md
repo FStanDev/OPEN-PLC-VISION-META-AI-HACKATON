@@ -2,8 +2,11 @@
 
 Logitech C920 capture: `GET /frame` returns one still JPEG (what the vision
 step consumes), `GET /preview` is an MJPEG stream for the dashboard/human
-check, `GET /health` is a liveness probe. Exposure, white balance and focus
-are locked to manual at startup (best-effort; refusals go to stderr).
+check, `GET /health` is a liveness probe. Exposure, white balance, focus,
+auto-priority and gain are locked to manual at startup: `v4l2-ctl` first
+(needs the `v4l-utils` apt package), then the cv2 properties with read-back
+checks; the current gain value is held so brightness cannot drift between
+frames. Every step is best-effort and refusals go to stderr.
 A failed grab is a 502 — the service never substitutes a stock image.
 
 ## Run on the Pi
@@ -29,5 +32,5 @@ curl -o /tmp/frame.jpg http://<pi>:8082/frame && file /tmp/frame.jpg
 If the picture is dark or blurry, check the manual settings took:
 
 ```bash
-v4l2-ctl -d /dev/video0 --list-ctrls | grep -Ei 'exposure|white|focus'
+v4l2-ctl -d /dev/video0 --get-ctrl exposure_auto,exposure_absolute,exposure_auto_priority,white_balance_automatic,focus_auto,gain
 ```

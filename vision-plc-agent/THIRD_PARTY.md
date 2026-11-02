@@ -11,6 +11,8 @@ metadata (exact resolved versions are pinned in `uv.lock`).
 | PyYAML | >=6.0 | MIT | YAML parsing |
 | httpx | >=0.28 | BSD-3-Clause | OpenPLC REST client |
 | pymodbus | >=3.0 | BSD-3-Clause | Tag readback over Modbus TCP |
+| opencv-python-headless | >=4.10,<6 | Apache-2.0 | Frame decode, brightness + angle measurement |
+| numpy | >=1.26 | BSD-3-Clause | Pixel stats for vision measurement |
 
 ## Pi services (installed on the Pi from `pi/*/requirements.txt`, not in `uv.lock`)
 

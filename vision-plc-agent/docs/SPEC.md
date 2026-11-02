@@ -108,7 +108,7 @@ This table is the contract between hardware, PLC code, the GPIO plugin, Modbus a
 | `lamp_red` | `%QX0.0` | Coil 0 | GPIO17 / 11 | 330 Ω, LED, GND | "red LED" → brightness |
 | `lamp_green` | `%QX0.1` | Coil 1 | GPIO27 / 13 | 330 Ω, LED, GND | "green LED" → brightness |
 | `lamp_yellow` | `%QX0.2` | Coil 2 | GPIO22 / 15 | 330 Ω, LED, GND | "yellow LED" → brightness |
-| `arm_angle` | `%QW0` (0–180, degrees) | Holding register 0 | PCA9685 channel 1 | Servo signal; servo power from external 5 V | "servo arm" → angle |
+| `arm_angle` | `%QW0` (0–180, degrees) | Holding register 0 | PCA9685 channel 2 | Servo signal; servo power from external 5 V | "servo arm" → angle |
 | `stim_start` | — (test harness only) | — | GPIO26 / 37 | 1 kΩ to GPIO5 node | — |
 | `stim_stop` | — (test harness only) | — | GPIO13 / 33 | 1 kΩ to GPIO6 node | — |
 

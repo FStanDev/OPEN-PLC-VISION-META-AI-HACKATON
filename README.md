@@ -66,6 +66,9 @@ The I/O contract (pins, IEC addresses, Modbus addresses) lives in
 | `vision-plc-agent-starter/` | Original starter kit the project was bootstrapped from |
 | `AGENTS.md`, `KICKOFF_PROMPT.md`, `docs/` | Original kickoff material |
 
+Note on history: Git was re-initialised at the project root on 31 Oct 2026; the
+first commit message was later reworded to explain this.
+
 ## Getting started
 
 Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).

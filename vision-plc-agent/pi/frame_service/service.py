@@ -10,13 +10,90 @@ error — never an empty frame, never a stock image.
 import argparse
 import json
 import os
+import subprocess
 import sys
 import threading
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 DEFAULT_PORT = 8082
 _BOUNDARY = "frame"
+
+# Authoritative lock set via v4l2-ctl (covers what cv2 cannot reach:
+# exposure_auto_priority is the C920's low-light hunting switch).
+# Spelling varies across drivers; rejected controls only warn.
+V4L2_LOCK_CONTROLS: tuple[tuple[str, int], ...] = (
+    ("exposure_auto", 1),  # manual
+    ("exposure_absolute", 200),
+    ("white_balance_automatic", 0),
+    ("focus_auto", 0),
+    ("focus_automatic_continuous", 0),
+    ("gain_automatic", 0),
+    ("exposure_auto_priority", 0),
+)
+
+
+def _warn(message: str) -> None:
+    sys.stderr.write(f"[frames] WARNING: {message}\n")
+
+
+def lock_camera(
+    device: str,
+    capture: Any,
+    cv2: Any,
+    *,
+    runner: Callable[..., Any] | None = None,
+) -> None:
+    """Lock the camera to fully manual operation (best effort).
+
+    v4l2-ctl first (authoritative, covers auto-priority/gain), then the
+    cv2 properties with read-back checks, then the gain is read and
+    re-applied so the current brightness is held instead of drifting.
+    Nothing here raises: every failure is a stderr warning, because a
+    half-locked camera still beats no camera.
+    """
+    run = runner if runner is not None else subprocess.run
+    _v4l2_lock(device, run)
+    wanted = {
+        cv2.CAP_PROP_AUTO_EXPOSURE: 1,  # manual
+        cv2.CAP_PROP_EXPOSURE: 200,
+        cv2.CAP_PROP_AUTO_WB: 0,
+        cv2.CAP_PROP_AUTOFOCUS: 0,
+    }
+    for prop, value in wanted.items():
+        ok = capture.set(prop, value)
+        actual = capture.get(prop)
+        if not ok or actual != value:
+            _warn(f"camera refused prop {prop}={value} (reads back {actual})")
+    gain = capture.get(cv2.CAP_PROP_GAIN)
+    if gain is None or gain < 0:
+        _warn("gain read-back unsupported; brightness may drift between frames")
+        return
+    capture.set(cv2.CAP_PROP_GAIN, gain)
+    if capture.get(cv2.CAP_PROP_GAIN) != gain:
+        _warn(f"gain would not hold at {gain}")
+
+
+def _v4l2_lock(device: str, runner: Callable[..., Any]) -> None:
+    for name, value in V4L2_LOCK_CONTROLS:
+        try:
+            done = runner(
+                ["v4l2-ctl", "-d", device, "--set-ctrl", f"{name}={value}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            _warn("v4l2-ctl not found (apt install v4l-utils); cv2-only lock")
+            return
+        except Exception as exc:
+            _warn(f"v4l2-ctl failed: {exc}")
+            return
+        if done.returncode != 0:
+            detail = str(getattr(done, "stderr", "") or "").strip().splitlines()
+            _warn(f"v4l2-ctl rejected {name}={value}: {detail[0][:120] if detail else 'rc=1'}")
 
 
 class GrabError(RuntimeError):
@@ -51,21 +128,8 @@ class Cv2Grabber(FrameGrabber):
         capture.set(cv2.CAP_PROP_FOURCC, fourcc)
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._lock_exposure(capture)
+        lock_camera(device, capture, cv2)
         self._capture = capture
-
-    def _lock_exposure(self, capture) -> None:
-        """Best-effort manual exposure/focus/WB; the C920 may refuse some."""
-        cv2 = self._cv2
-        wanted = {
-            cv2.CAP_PROP_AUTO_EXPOSURE: 1,  # manual
-            cv2.CAP_PROP_EXPOSURE: 200,
-            cv2.CAP_PROP_AUTO_WB: 0,
-            cv2.CAP_PROP_AUTOFOCUS: 0,
-        }
-        for prop, value in wanted.items():
-            if not capture.set(prop, value):
-                sys.stderr.write(f"[frames] WARNING: camera refused prop {prop}={value}\n")
 
     def grab_jpeg(self) -> bytes:
         ok, frame = self._capture.read()

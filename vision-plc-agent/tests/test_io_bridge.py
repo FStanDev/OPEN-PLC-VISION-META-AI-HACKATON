@@ -98,13 +98,13 @@ def test_sync_clamps_servo_and_treats_int_as_signed() -> None:
     buffers = FakeBuffers()
     buffers.int_outputs[0] = 90
     bridge.sync(buffers)
-    assert pwm.angles[1] == 90  # io_map arm_angle channel
+    assert pwm.angles[2] == 90  # io_map arm_angle channel
     buffers.int_outputs[0] = 1000
     bridge.sync(buffers)
-    assert pwm.angles[1] == 180
+    assert pwm.angles[2] == 180
     buffers.int_outputs[0] = 0xFFFF  # ST INT -1 on the wire
     bridge.sync(buffers)
-    assert pwm.angles[1] == 0
+    assert pwm.angles[2] == 0
 
 
 def test_sync_propagates_buffer_errors() -> None:
@@ -127,7 +127,7 @@ def test_safe_state_turns_everything_off() -> None:
     assert gpio.levels[17] is False
     assert gpio.levels[27] is False
     assert gpio.levels[22] is False
-    assert pwm.angles[1] == 0
+    assert pwm.angles[2] == 0
 
 
 def test_optional_servo_skipped_without_pwm() -> None:

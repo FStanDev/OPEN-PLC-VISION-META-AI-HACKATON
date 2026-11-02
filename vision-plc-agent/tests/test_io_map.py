@@ -27,7 +27,7 @@ def test_servo_signal_is_optional_with_pca9685() -> None:
     arm = load_io_map(ROOT / "io_map.yaml").signals["arm_angle"]
     assert arm.optional
     assert arm.range == (0, 180)
-    assert arm.pca9685 is not None and arm.pca9685.channel == 1
+    assert arm.pca9685 is not None and arm.pca9685.channel == 2
 
 
 def test_default_path_is_project_root() -> None:
