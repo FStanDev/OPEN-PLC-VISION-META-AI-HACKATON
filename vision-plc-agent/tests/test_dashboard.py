@@ -14,7 +14,7 @@ from agent.codegen import ProgramFiles
 from agent.io_map import load_io_map
 from agent.loop import wait_for_dashboard_approval
 from agent.spec import check_against_io_map, load_task_spec
-from dashboard.server import PLACEHOLDER_PNG, create_server
+from dashboard.server import PLACEHOLDER_PNG, DashboardState, create_server
 
 ROOT = Path(__file__).resolve().parent.parent
 FRAME_BYTES = b"\xff\xd8fake-jpeg-bytes\xff\xd9"
@@ -236,6 +236,24 @@ def test_pending_lists_only_awaiting(base_url: str) -> None:
     payload = _get_json(base_url, "/api/pending")
     assert isinstance(payload, dict)
     assert [r["run_id"] for r in payload["pending"]] == ["20261102T130000Z-lamp_seq"]
+
+
+def test_generating_run_shows_stage(base_url: str, runs_dir: Path) -> None:
+    run = runs_dir / "20261102T140000Z-gen"
+    run.mkdir()
+    (run / "status.json").write_text(
+        json.dumps({"run_id": run.name, "stage": "generating", "at": "2026-11-02T14:00:00"}),
+        encoding="utf-8",
+    )
+    payload = _get_json(base_url, "/api/runs")
+    assert isinstance(payload, dict)
+    by_id = {r["run_id"]: r for r in payload["runs"]}
+    assert by_id[run.name]["stage"] == "generating"
+    assert by_id[run.name]["verdict"] == "generating"
+    detail = _get_json(base_url, f"/api/runs/{run.name}")
+    assert isinstance(detail, dict)
+    assert detail["status"]["stage"] == "generating"
+    assert detail["report"] is None
 
 
 def test_run_detail_has_snapshots_and_frames(base_url: str) -> None:
@@ -486,3 +504,62 @@ def test_start_run_guards_busy_and_unknown(task_server: tuple) -> None:
         assert bad_mode[0] == 400
     finally:
         _wait_for_report(base, "busy1")
+
+
+def test_config_reports_default_pi_host(tmp_path: Path) -> None:
+    server = create_server(tmp_path, host="127.0.0.1", port=0, pi_host="10.0.0.7")
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        assert _get_json(base, "/api/config") == {"pi_host": "10.0.0.7"}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_start_run_real_passes_pi_host_and_calibration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import agent.loop
+
+    seen: list[list[str]] = []
+    monkeypatch.setattr(agent.loop, "main", lambda argv: seen.append(argv) or 0)
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "t1.yaml").write_text("task_id: t1\n", encoding="utf-8")
+    state = DashboardState(
+        tmp_path / "runs",
+        "http://raspberrypi:8082",
+        specs,
+        calibration=tmp_path / "cal.json",
+    )
+    status, payload = state.start_run(
+        {"task_id": "t1", "mode": "real", "pi_host": " 10.0.0.7 ", "run_id": "r1"}
+    )
+    assert status == 200, payload
+    state._jobs["r1"]["thread"].join(timeout=5)  # type: ignore[union-attr]
+    argv = seen[0]
+    assert argv[argv.index("--pi-host") + 1] == "10.0.0.7"
+    assert argv[argv.index("--calibration") + 1] == str(tmp_path / "cal.json")
+    assert state.frames_url == "http://10.0.0.7:8082"
+    assert state.pi_host == "10.0.0.7"
+
+
+def test_start_run_rejects_bad_pi_host(tmp_path: Path) -> None:
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "t1.yaml").write_text("task_id: t1\n", encoding="utf-8")
+    state = DashboardState(tmp_path / "runs", None, specs)
+    status, _ = state.start_run({"task_id": "t1", "mode": "real", "pi_host": "evil/x"})
+    assert status == 400
+
+
+def test_preview_backs_off_after_camera_failure(tmp_path: Path) -> None:
+    state = DashboardState(tmp_path, "http://127.0.0.1:9")  # nothing listens on port 9
+    assert state.live_frame()[2] == "none"
+    assert state._live_retry_at > 0
+    state.frames_url = "http://unused.invalid"
+    blob, _, source = state.live_frame()  # within the back-off: no network call
+    assert source == "none" and blob == PLACEHOLDER_PNG

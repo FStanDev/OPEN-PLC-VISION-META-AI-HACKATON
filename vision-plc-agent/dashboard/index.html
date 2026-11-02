@@ -23,8 +23,15 @@
   .chip.pass { background: var(--pass); } .chip.fail { background: var(--fail); }
   .chip.warn { background: var(--warn); } .chip.info { background: var(--accent); }
   #pending { display: none; background: #fff4d6; border-bottom: 1px solid #e3c76a;
-    padding: 10px 16px; gap: 10px; align-items: center; flex-wrap: wrap; }
+    padding: 10px 16px; gap: 10px; align-items: center; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 50; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
   #pending.show { display: flex; }
+  .spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid #8b939e; border-top-color: #fff;
+    animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  #generateBtn:disabled { background: var(--muted); cursor: wait; }
   #pending button { background: var(--pass); color: #fff; border: 0; border-radius: 6px;
     padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
   main { display: grid; grid-template-columns: minmax(340px, 5fr) minmax(400px, 7fr);
@@ -79,6 +86,7 @@
   <button id="refreshBtn" type="button">Refresh</button>
   <button id="newTaskBtn" type="button">New task</button>
   <span class="spacer"></span>
+  <span id="liveSpin" class="spinner" hidden></span>
   <span id="verdict" class="chip">—</span>
 </header>
 <div id="pending">
@@ -104,6 +112,8 @@
           <option value="fake">fake (no Pi, no credits)</option>
           <option value="real">real (deploys to the Pi after approval)</option>
         </select>
+        <label class="muted" for="piHost" style="margin:0">Pi address</label>
+        <input type="text" id="piHost" placeholder="192.168.1.198" autocomplete="off" style="width:12em">
         <label class="muted" style="margin:0"><input type="checkbox" id="taskOverwrite"> overwrite existing spec</label>
         <button id="exampleBtn" type="button">Load example</button>
       </div>
@@ -209,6 +219,7 @@ function showPending(list) {
 async function loadDetail(runId) {
   const res = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
   detail = await res.json();
+  $("liveSpin").hidden = !(detail.live && !detail.report);
   renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
   renderFrames();
 }
@@ -371,8 +382,11 @@ function showFrame(name) {
   img.src = `/api/runs/${encodeURIComponent(detail.run_id)}/frames/${encodeURIComponent(name)}`;
 }
 
+let liveBusy = false;  // one preview request at a time; a slow camera never piles up
+
 function tickLive() {
-  if (document.hidden) return;
+  if (document.hidden || liveBusy) return;
+  liveBusy = true;
   const img = $("live");
   fetch("/api/preview.jpg", {cache: "no-store"}).then(async (res) => {
     const blob = await res.blob();
@@ -381,7 +395,7 @@ function tickLive() {
     const badge = $("liveSrc");
     badge.textContent = src === "live" ? "live camera" : src === "last-run" ? "last run frame" : "no camera";
     badge.className = "chip " + (src === "live" ? "pass" : src === "last-run" ? "info" : "");
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => { liveBusy = false; });
 }
 
 const EXAMPLE_TESTS = `- name: start_latches_lamp
@@ -394,6 +408,17 @@ const EXAMPLE_TESTS = `- name: start_latches_lamp
 `;
 const EXAMPLE_SIGNALS = ["start_btn", "stop_btn", "lamp_red", "arm_angle"];
 let following = null;
+
+async function loadPiHost() {
+  // Last address typed here wins; otherwise the server default ($PI_HOST).
+  let saved = "";
+  try { saved = localStorage.getItem("piHost") || ""; } catch (e) { /* storage blocked */ }
+  if (saved) { $("piHost").value = saved; return; }
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    $("piHost").value = cfg.pi_host || "";
+  } catch (e) { /* leave empty */ }
+}
 
 async function loadIoMap() {
   const box = $("sigBoxes");
@@ -435,29 +460,69 @@ async function generate() {
   });
   if (!task.ok) { msg.textContent = `spec error: ${task.error}`; return; }
   msg.textContent = "starting loop…";
+  const mode = $("runMode").value;
+  const piHost = $("piHost").value.trim();
+  if (mode === "real" && !piHost) { msg.textContent = "real mode needs the Pi address"; return; }
+  try { localStorage.setItem("piHost", piHost); } catch (e) { /* storage blocked */ }
   const [s2, run] = await postJson("/api/runs/start", {
-    task_id: task.task_id, mode: $("runMode").value,
+    task_id: task.task_id, mode, pi_host: mode === "real" ? piHost : "",
   });
   if (!run.ok) { msg.textContent = `start error: ${run.error}`; return; }
-  msg.textContent = `run ${run.run_id} started — code appears below as it is generated.`;
-  following = run.run_id;
+  setFollowing(run.run_id);
+  msg.textContent = `run ${run.run_id}: starting… — code appears below as it is generated.`;
   await loadRuns();
   $("runSel").value = run.run_id;
   await loadDetail(run.run_id);
 }
 
+let followStart = 0;
+
+function setFollowing(runId) {
+  following = runId;
+  followStart = Date.now();
+  $("generateBtn").disabled = runId !== null;
+  if (runId === null) $("liveSpin").hidden = true;
+}
+
+function stageOf(d) {
+  if (d.report) return d.report.verdict;
+  if (d.status && d.status.stage) return d.status.stage;
+  if (d.pending) return "awaiting_approval";
+  return "starting";
+}
+
 async function pollFollowed() {
   if (!following || document.hidden) return;
-  const res = await fetch(`/api/runs/${encodeURIComponent(following)}`);
+  let res;
+  try {
+    res = await fetch(`/api/runs/${encodeURIComponent(following)}`);
+  } catch (e) { return; }
+  if (!res.ok) {
+    $("taskMsg").textContent = `run ${following}: lost contact with the server.`;
+    setFollowing(null);
+    return;
+  }
   detail = await res.json();
   if ($("runSel").value === following) {
     renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
     renderFrames();
   }
-  if (detail.report) { following = null; await loadRuns(); }
+  const stage = stageOf(detail);
+  const done = detail.report !== null || stage === "error";
+  $("liveSpin").hidden = done;
+  if (done) {
+    const verdict = detail.report ? detail.report.verdict : `error: ${detail.status.error || "?"}`;
+    $("taskMsg").textContent = `run ${following} finished: ${verdict}.`;
+    setFollowing(null);
+    await loadRuns();
+    return;
+  }
+  const elapsed = Math.round((Date.now() - followStart) / 1000);
+  $("taskMsg").textContent =
+    `run ${following}: ${stage}… (${elapsed}s) — code appears below as it is generated.`;
 }
 
-$("runSel").onchange = (e) => { following = null; loadDetail(e.target.value); };
+$("runSel").onchange = (e) => { setFollowing(null); loadDetail(e.target.value); };
 $("refreshBtn").onclick = loadRuns;
 $("newTaskBtn").onclick = () => $("newTask").classList.toggle("show");
 $("exampleBtn").onclick = () => { $("taskTests").value = EXAMPLE_TESTS; };
@@ -473,6 +538,7 @@ $("codeTabs").querySelectorAll("button").forEach((b) => {
 });
 loadRuns();
 loadIoMap();
+loadPiHost();
 setInterval(tickLive, 1000);
 setInterval(loadRuns, 15000);
 setInterval(pollFollowed, 2000);

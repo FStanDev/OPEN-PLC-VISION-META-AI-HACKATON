@@ -22,6 +22,7 @@ import json
 import os
 import re
 import threading
+import time
 import urllib.request
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,8 +31,9 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from agent.dotenv import load_dotenv
 from agent.io_map import load_io_map
-from agent.loop import RUN_ID_FORMAT
+from agent.loop import PI_HOST_RE, PI_URL_DEFAULTS, RUN_ID_FORMAT, with_pi_host
 from agent.spec import TaskSpec, check_against_io_map
 
 INDEX_PATH = Path(__file__).resolve().parent / "index.html"
@@ -39,6 +41,7 @@ RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 TASK_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 FRAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.(jpg|jpeg|png)")
 PREVIEW_TIMEOUT_S = 3.0
+PREVIEW_RETRY_S = 15.0  # after a failed live grab, serve the fallback this long
 REAL_APPROVAL_WAIT_S = 600.0
 ERROR_TAIL_CHARS = 1000
 
@@ -107,12 +110,13 @@ def run_summary(run_dir: Path, live: bool = False) -> dict[str, object]:
     status = read_json(run_dir / "status.json")
     summary["stage"] = status.get("stage") if status else None
     if report is None:
-        summary.update(
-            {"task_id": None, "verdict": "awaiting_approval", "passed": False, "tests": []}
-        )
+        summary.update({"task_id": None, "verdict": None, "passed": False, "tests": []})
         pending = read_json(run_dir / "pending_approval.json")
         if isinstance(pending, dict):
             summary["task_id"] = pending.get("task_id")
+            summary["verdict"] = "awaiting_approval"
+        elif status:
+            summary["verdict"] = status.get("stage")
         return summary
     tests = report.get("tests")
     summary.update(
@@ -191,9 +195,14 @@ class DashboardState:
         frames_url: str | None,
         specs_dir: Path | None = None,
         io_map_path: str | Path | None = None,
+        pi_host: str = "",
+        calibration: str | Path | None = None,
     ) -> None:
         self.runs_dir = runs_dir
         self.frames_url = (frames_url or "").rstrip("/")
+        self.pi_host = pi_host
+        self.calibration = calibration
+        self._live_retry_at = 0.0  # monotonic time before which live grabs are skipped
         self.specs_dir = Path(specs_dir) if specs_dir is not None else None
         self.io_map_path = io_map_path
         self._lock = threading.Lock()
@@ -302,6 +311,10 @@ class DashboardState:
         mode = body.get("mode", "fake")
         if mode not in ("fake", "real"):
             return 400, {"error": "mode must be 'fake' or 'real'"}
+        pi_host = body.get("pi_host") or ""
+        if not isinstance(pi_host, str) or (pi_host and not PI_HOST_RE.fullmatch(pi_host.strip())):
+            return 400, {"error": "pi_host must be an IP address or hostname"}
+        pi_host = pi_host.strip()
         busy = self.active_run()
         if busy is not None:
             return 409, {"error": f"run {busy} still active; one run at a time"}
@@ -330,17 +343,30 @@ class DashboardState:
         }
         thread = threading.Thread(
             target=self._run_job,
-            args=(job, spec_path, run_dir, mode, float(wait_s)),
+            args=(job, spec_path, run_dir, mode, float(wait_s), pi_host),
             daemon=True,
         )
         job["thread"] = thread
         with self._lock:
             self._jobs[run_id] = job
+            if mode == "real" and pi_host:
+                # The live camera tile follows the Pi the run talks to.
+                self.pi_host = pi_host
+                self.frames_url = with_pi_host(
+                    self.frames_url, pi_host, PI_URL_DEFAULTS["FRAMES_URL"]
+                ).rstrip("/")
+                self._live_retry_at = 0.0
         thread.start()
         return 200, {"ok": True, "run_id": run_id}
 
     def _run_job(
-        self, job: dict[str, object], spec_path: Path, run_dir: Path, mode: str, wait_s: float
+        self,
+        job: dict[str, object],
+        spec_path: Path,
+        run_dir: Path,
+        mode: str,
+        wait_s: float,
+        pi_host: str = "",
     ) -> None:
         from agent.loop import main as run_loop_main
         from agent.loop import write_status
@@ -350,6 +376,10 @@ class DashboardState:
             argv.append("--fake")
         else:
             argv += ["--wait-approval", str(wait_s)]
+            if pi_host:
+                argv += ["--pi-host", pi_host]
+            if self.calibration:
+                argv += ["--calibration", str(self.calibration)]
         try:
             job["rc"] = run_loop_main(argv)
         except SystemExit as exc:
@@ -403,7 +433,7 @@ class DashboardState:
 
     def live_frame(self) -> tuple[bytes, str, str]:
         """Best camera bytes: live frame service, newest run frame, placeholder."""
-        if self.frames_url:
+        if self.frames_url and time.monotonic() >= self._live_retry_at:
             try:
                 with urllib.request.urlopen(
                     f"{self.frames_url}/frame", timeout=PREVIEW_TIMEOUT_S
@@ -412,7 +442,8 @@ class DashboardState:
                 if blob:
                     return blob, "image/jpeg", "live"
             except Exception:
-                pass
+                # Unreachable camera: don't stall every 1 s poll on the timeout.
+                self._live_retry_at = time.monotonic() + PREVIEW_RETRY_S
         cached = self.newest_frame()
         if cached is not None:
             return cached, "image/jpeg", "last-run"
@@ -426,6 +457,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt: str, *args: object) -> None:
         pass  # keep demo output clean; errors still raise
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True  # browser dropped the request (reload, new poll)
 
     def _send_json(self, status: int, payload: object) -> None:
         blob = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
@@ -463,6 +500,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path == "/api/pending":
             pending = [r for r in self.state.list_runs() if r.get("pending_approval")]
             self._send_json(200, {"pending": pending})
+            return
+        if path == "/api/config":
+            self._send_json(200, {"pi_host": self.state.pi_host})
             return
         if path == "/api/io-map":
             status, payload = self.state.io_map_payload()
@@ -572,6 +612,8 @@ def create_server(
     frames_url: str | None = None,
     specs_dir: str | Path | None = None,
     io_map: str | Path | None = None,
+    pi_host: str = "",
+    calibration: str | Path | None = None,
 ) -> ThreadingHTTPServer:
     """Build (but do not start) the dashboard server."""
     state = DashboardState(
@@ -579,6 +621,8 @@ def create_server(
         frames_url,
         Path(specs_dir) if specs_dir is not None else None,
         io_map,
+        pi_host=pi_host,
+        calibration=calibration,
     )
 
     class BoundHandler(DashboardHandler):
@@ -590,7 +634,16 @@ def create_server(
     return server
 
 
+def default_pi_host() -> str:
+    """Pi address for the dashboard textbox: $PI_HOST, else the $FRAMES_URL host."""
+    host = os.environ.get("PI_HOST", "").strip()
+    if host:
+        return host
+    return urlparse(os.environ.get("FRAMES_URL", "").strip()).hostname or ""
+
+
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()  # same .env as agent.loop (FRAMES_URL, PI_HOST, ...)
     parser = argparse.ArgumentParser(description="Serve the vision-plc-agent dashboard.")
     parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--specs-dir", default="specs")
@@ -602,6 +655,12 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("FRAMES_URL", ""),
         help="Pi frame service base URL (default: $FRAMES_URL, else last run frame)",
     )
+    parser.add_argument(
+        "--pi-host",
+        default=default_pi_host(),
+        help="default Pi address in the run form (default: $PI_HOST or the $FRAMES_URL host)",
+    )
+    parser.add_argument("--calibration", default=None, help="calibration.json passed to real runs")
     args = parser.parse_args(argv)
     server = create_server(
         args.runs_dir,
@@ -610,6 +669,8 @@ def main(argv: list[str] | None = None) -> int:
         frames_url=args.frames_url or None,
         specs_dir=args.specs_dir,
         io_map=args.io_map,
+        pi_host=args.pi_host,
+        calibration=args.calibration,
     )
     print(f"dashboard: http://{args.host}:{args.port}/  (runs: {args.runs_dir})")
     try:

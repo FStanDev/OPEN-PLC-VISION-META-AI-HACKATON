@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from agent.diagnose import Verdict
 from agent.io_map import load_io_map
 from agent.llm_backend import ScriptedLlmBackend
@@ -21,6 +23,7 @@ from agent.loop import (
     run_physical_test,
     run_stimulus_timeline,
     values_match,
+    with_pi_host,
 )
 from agent.measure import Calibration
 from agent.plc_client import FakePlcClient, PlcError
@@ -417,6 +420,52 @@ def test_run_loop_full_pass(tmp_path: Path) -> None:
     assert stored["verdict"] == "pass" and stored["input_tokens"] > 0
 
 
+def test_run_loop_writes_progress_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import agent.loop as loop_mod
+
+    exe = _write_exe(tmp_path / "strucpp", FAKE_PASS)
+    clock = FakeClock()
+    plc, writer, stim = FakePlcClient(), FakeTagWriter(), FakeStimulus()
+    run_dir = tmp_path / "run"
+    seen: dict[str, object] = {}
+    real_codegen = loop_mod.generate_with_repairs
+
+    def _spy_codegen(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        seen["generating"] = json.loads((run_dir / "status.json").read_text())["stage"]
+        return real_codegen(*args, **kwargs)
+
+    monkeypatch.setattr(loop_mod, "generate_with_repairs", _spy_codegen)
+
+    def _approve(files: object, diagram: str) -> bool:
+        seen["at_approval"] = json.loads((run_dir / "status.json").read_text())["stage"]
+        seen["early_code"] = (run_dir / "main.st").is_file()
+        return True
+
+    report = run_loop(
+        _single_spec(),
+        load_io_map(),
+        run_dir=run_dir,
+        llm=_llm_for_pass(),
+        plc=plc,
+        tags=FakeTagReader({"lamp_red": True}),
+        writer=writer,
+        stimulus=stim,
+        vision_check=agreeing_vision_check,
+        strucpp=str(exe),
+        approve_fn=_approve,
+        deploy_fn=_fake_deploy(plc),
+        sleep_s=clock.sleep_s,
+        now_ms=clock.now_ms,
+        calibration=Calibration(),
+    )
+    assert report.passed
+    assert seen["generating"] == "generating"
+    assert seen["at_approval"] == "awaiting_approval"
+    assert seen["early_code"] is True
+    final = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
+    assert final["stage"] == "done" and final["verdict"] == "pass"
+
+
 def test_run_loop_not_approved_skips_deploy(tmp_path: Path) -> None:
     exe = _write_exe(tmp_path / "strucpp", FAKE_PASS)
     clock = FakeClock()
@@ -627,3 +676,15 @@ def test_main_fake_end_to_end(tmp_path: Path) -> None:
 def test_main_fake_loads_example_spec(tmp_path: Path) -> None:
     spec = load_task_spec(ROOT / "specs" / "start_lamp_arm.yaml")
     assert spec.task_id == "start_lamp_arm"
+
+
+def test_with_pi_host_swaps_host_keeps_scheme_port_path() -> None:
+    assert with_pi_host("https://raspberrypi:8443", "10.0.0.7", "") == "https://10.0.0.7:8443"
+    assert with_pi_host("http://old/x", "pi.lan", "") == "http://pi.lan/x"
+    assert with_pi_host("", "10.0.0.7", "http://{host}:8082") == "http://10.0.0.7:8082"
+
+
+def test_with_pi_host_rejects_bad_host() -> None:
+    for bad in ("", "a b", "x/y", "h:80", "-x"):
+        with pytest.raises(ValueError):
+            with_pi_host("http://old:1", bad, "")

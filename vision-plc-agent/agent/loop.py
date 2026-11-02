@@ -19,11 +19,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from agent.codegen import (
     MAX_REPAIR_ROUNDS,
@@ -58,6 +60,29 @@ POLL_INTERVAL_MS = 50
 FAKE_PROGRAM_ZIP = b"fake-program-zip: no packager in --fake mode"
 RUN_ID_FORMAT = "%Y%m%dT%H%M%SZ"
 PENDING_APPROVAL_FILE = "pending_approval.json"
+PI_HOST_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*")
+# Default service URLs used by --pi-host when the env var is empty.
+PI_URL_DEFAULTS = {
+    "OPENPLC_URL": "https://{host}:8443",
+    "STIMULUS_URL": "http://{host}:8081",
+    "FRAMES_URL": "http://{host}:8082",
+}
+
+
+def with_pi_host(url: str, host: str, default: str) -> str:
+    """Swap the host in ``url`` for ``host``, keeping scheme, port and path.
+
+    An empty ``url`` becomes ``default`` formatted with the host.
+    """
+    if not PI_HOST_RE.fullmatch(host):
+        raise ValueError(f"bad Pi host {host!r}: want an IP address or hostname")
+    if not url:
+        return default.format(host=host)
+    parts = urlsplit(url)
+    netloc = host if parts.port is None else f"{host}:{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
+
+
 APPROVAL_FILE = "approved.json"
 STATUS_FILE = "status.json"
 APPROVAL_POLL_S = 1.0
@@ -742,6 +767,7 @@ def run_loop(
         )
 
     # Steps 1-3: plan, generate, offline check (M4).
+    write_status(run_dir, "generating")
     codegen = generate_with_repairs(
         spec,
         io_map,
@@ -965,6 +991,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--modbus-port", type=int, default=None, help="default: $MODBUS_PORT or 5020"
     )
+    parser.add_argument(
+        "--pi-host",
+        default=None,
+        help="Pi IP or hostname; overrides PI_HOST and the host in OPENPLC_URL, "
+        "STIMULUS_URL and FRAMES_URL (real mode)",
+    )
     args = parser.parse_args(argv)
 
     spec = load_task_spec(args.spec)
@@ -1042,6 +1074,16 @@ def main(argv: list[str] | None = None) -> int:
     pi_host = os.environ.get("PI_HOST", "").strip()
     stimulus_url = os.environ.get("STIMULUS_URL", "").strip()
     frames_url = os.environ.get("FRAMES_URL", "").strip()
+    if args.pi_host:
+        host = args.pi_host.strip()
+        try:
+            openplc_url = with_pi_host(openplc_url, host, PI_URL_DEFAULTS["OPENPLC_URL"])
+            stimulus_url = with_pi_host(stimulus_url, host, PI_URL_DEFAULTS["STIMULUS_URL"])
+            frames_url = with_pi_host(frames_url, host, PI_URL_DEFAULTS["FRAMES_URL"])
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        pi_host = host
+        print(f"pi host {host}: openplc={openplc_url} stimulus={stimulus_url} frames={frames_url}")
     missing = [
         name
         for name, value in (
