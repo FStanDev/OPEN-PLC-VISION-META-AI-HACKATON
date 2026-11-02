@@ -134,6 +134,60 @@ def base_url(runs_dir: Path):
     server.server_close()
 
 
+@pytest.fixture
+def task_server(tmp_path: Path):
+    runs = tmp_path / "task-runs"
+    runs.mkdir()
+    specs = tmp_path / "task-specs"
+    specs.mkdir()
+    server = create_server(runs, host="127.0.0.1", port=0, specs_dir=specs)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", specs, runs
+    server.shutdown()
+    thread.join(timeout=5)
+    server.server_close()
+
+
+VALID_TESTS_YAML = """\
+- name: start_latches_lamp
+  stimulus:
+    - {at_ms: 0, press: start_btn}
+    - {at_ms: 200, release: start_btn}
+  expect:
+    - {signal: lamp_red, value: true, within_ms: 500}
+    - {signal: arm_angle, value: 90, tolerance: 10, within_ms: 1500}
+"""
+
+
+def _valid_task(task_id: str = "smoke_task") -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "description": "Latch the red lamp and move the arm.",
+        "signals": ["start_btn", "stop_btn", "lamp_red", "arm_angle"],
+        "tests": VALID_TESTS_YAML,
+    }
+
+
+def _wait_for_report(base: str, run_id: str, timeout_s: float = 120.0) -> dict:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            detail = _get_json(base, f"/api/runs/{run_id}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            time.sleep(0.5)
+            continue
+        assert isinstance(detail, dict)
+        if detail.get("report"):
+            return detail
+        time.sleep(1.0)
+    raise AssertionError(f"run {run_id} produced no report within {timeout_s}s")
+
+
 def _get_json(base_url: str, path: str) -> object:
     with urllib.request.urlopen(base_url + path, timeout=5) as response:
         assert response.headers.get_content_type() == "application/json"
@@ -347,3 +401,88 @@ def test_wait_for_dashboard_approval_times_out(tmp_path: Path) -> None:
         tmp_path / "run", spec, timeout_s=0, poll_s=0, sleep_fn=lambda s: None
     )
     assert waiter(ProgramFiles(main_st="m", tests_st="t"), "diagram") is False
+
+
+def test_io_map_lists_signals(base_url: str) -> None:
+    payload = _get_json(base_url, "/api/io-map")
+    assert isinstance(payload, dict)
+    by_name = {s["name"]: s for s in payload["signals"]}
+    assert by_name["lamp_red"]["iec"] == "%QX0.0"
+    assert by_name["start_btn"]["direction"] == "input"
+    assert payload["safe_state"]["lamp_red"] is False
+
+
+def test_create_task_writes_validated_spec(task_server: tuple) -> None:
+    base, specs, _ = task_server
+    status, payload = _post_json(base, "/api/tasks", _valid_task())
+    assert status == 200
+    assert isinstance(payload, dict) and payload["task_id"] == "smoke_task"
+    spec = load_task_spec(specs / "smoke_task.yaml")
+    assert spec.task_id == "smoke_task" and len(spec.tests) == 1
+    assert spec.tests[0].expect[1].value == 90
+
+
+def test_create_task_rejects_bad_specs(task_server: tuple) -> None:
+    base, _, _ = task_server
+    bad_id = _valid_task(task_id="../evil")
+    assert _post_json(base, "/api/tasks", bad_id)[0] == 400
+    bad_signal = _valid_task()
+    bad_signal["signals"] = ["no_such_signal"]
+    status, payload = _post_json(base, "/api/tasks", bad_signal)
+    assert status == 400 and "unknown signal" in str(payload)
+    bad_yaml = _valid_task()
+    bad_yaml["tests"] = "- name: [unclosed"
+    assert _post_json(base, "/api/tasks", bad_yaml)[0] == 400
+    bad_deadline = _valid_task()
+    bad_deadline["tests"] = "- {name: t, expect: [{signal: lamp_red, value: true}]}"
+    status, payload = _post_json(base, "/api/tasks", bad_deadline)
+    assert status == 400 and "within_ms" in str(payload)
+
+
+def test_create_task_conflict_needs_overwrite(task_server: tuple) -> None:
+    base, _, _ = task_server
+    assert _post_json(base, "/api/tasks", _valid_task())[0] == 200
+    assert _post_json(base, "/api/tasks", _valid_task())[0] == 409
+    retry = _valid_task()
+    retry["overwrite"] = True
+    assert _post_json(base, "/api/tasks", retry)[0] == 200
+
+
+def test_tasks_without_specs_dir_is_500(base_url: str) -> None:
+    assert _post_json(base_url, "/api/tasks", _valid_task())[0] == 500
+    assert _post_json(base_url, "/api/runs/start", {"task_id": "x"})[0] == 500
+
+
+def test_start_run_fake_completes(task_server: tuple) -> None:
+    base, _, _ = task_server
+    assert _post_json(base, "/api/tasks", _valid_task())[0] == 200
+    status, payload = _post_json(
+        base, "/api/runs/start", {"task_id": "smoke_task", "mode": "fake", "run_id": "demo1"}
+    )
+    assert status == 200
+    assert isinstance(payload, dict) and payload["run_id"] == "demo1"
+    detail = _wait_for_report(base, "demo1")
+    report = detail["report"]
+    assert report["verdict"] == "pass" and report["passed"] is True
+    assert detail["status"]["stage"] == "done"
+    assert "PROGRAM Main" in detail["snapshots"][-1]["main_st"]
+
+
+def test_start_run_guards_busy_and_unknown(task_server: tuple) -> None:
+    base, _, _ = task_server
+    assert _post_json(base, "/api/tasks", _valid_task())[0] == 200
+    assert _post_json(base, "/api/tasks", _valid_task(task_id="second"))[0] == 200
+    first = _post_json(
+        base, "/api/runs/start", {"task_id": "smoke_task", "mode": "fake", "run_id": "busy1"}
+    )
+    assert first[0] == 200
+    try:
+        status, payload = _post_json(
+            base, "/api/runs/start", {"task_id": "second", "mode": "fake", "run_id": "busy2"}
+        )
+        assert status == 409 and "still active" in str(payload)
+        assert _post_json(base, "/api/runs/start", {"task_id": "nope"})[0] == 404
+        bad_mode = _post_json(base, "/api/runs/start", {"task_id": "second", "mode": "quantum"})
+        assert bad_mode[0] == 400
+    finally:
+        _wait_for_report(base, "busy1")

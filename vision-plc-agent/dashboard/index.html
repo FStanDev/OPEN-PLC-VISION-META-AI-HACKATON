@@ -59,6 +59,17 @@
     background: #f4f6f8; padding: 8px; border-radius: 6px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .muted { color: var(--muted); }
+  #newTask { display: none; }
+  #newTask.show { display: block; }
+  #newTask label { display: block; font-weight: 600; margin: 8px 0 4px; }
+  #newTask input[type=text], #newTask textarea, #newTask select {
+    width: 100%; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line);
+    border-radius: 6px; font-family: inherit; }
+  #newTask textarea { font-family: var(--mono); font-size: 12px; }
+  #sigBoxes { display: flex; gap: 10px; flex-wrap: wrap; }
+  #sigBoxes label { font-weight: 400; margin: 0; display: flex; gap: 4px; align-items: center; }
+  #generateBtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -66,6 +77,7 @@
   <h1>Vision PLC Agent</h1>
   <select id="runSel" title="Run"></select>
   <button id="refreshBtn" type="button">Refresh</button>
+  <button id="newTaskBtn" type="button">New task</button>
   <span class="spacer"></span>
   <span id="verdict" class="chip">—</span>
 </header>
@@ -76,6 +88,28 @@
 </div>
 <main>
   <div>
+    <section id="newTask">
+      <h2>New task — describe it, the agent writes the ST</h2>
+      <label for="taskId">task_id</label>
+      <input type="text" id="taskId" value="demo_task" autocomplete="off">
+      <label for="taskDesc">description (plain English)</label>
+      <textarea id="taskDesc" rows="3">When start is pressed, latch the red lamp on. Stop turns everything off.</textarea>
+      <label>signals (from io_map.yaml)</label>
+      <div id="sigBoxes"><span class="muted">loading…</span></div>
+      <label for="taskTests">acceptance tests (YAML list)</label>
+      <textarea id="taskTests" rows="9"></textarea>
+      <div class="row" style="margin-top:8px">
+        <label class="muted" for="runMode" style="margin:0">mode</label>
+        <select id="runMode" style="width:auto">
+          <option value="fake">fake (no Pi, no credits)</option>
+          <option value="real">real (deploys to the Pi after approval)</option>
+        </select>
+        <label class="muted" style="margin:0"><input type="checkbox" id="taskOverwrite"> overwrite existing spec</label>
+        <button id="exampleBtn" type="button">Load example</button>
+      </div>
+      <button id="generateBtn" type="button">Generate &amp; run</button>
+      <span id="taskMsg" class="muted"></span>
+    </section>
     <section>
       <h2>Camera (live / last run)</h2>
       <img id="live" alt="camera preview">
@@ -181,9 +215,12 @@ async function loadDetail(runId) {
 
 function renderVerdict() {
   const rep = detail.report, v = $("verdict");
-  const verdict = rep ? rep.verdict : detail.pending ? "awaiting_approval" : "?";
+  let verdict = rep ? rep.verdict
+    : detail.pending ? "awaiting_approval"
+    : detail.status ? detail.status.stage : "?";
+  if (!rep && detail.live) verdict += " (live)";
   v.textContent = verdict;
-  v.className = "chip " + verdictClass(verdict);
+  v.className = "chip " + verdictClass(rep ? verdict : "");
 }
 
 function renderTimeline() {
@@ -212,8 +249,9 @@ function renderTimeline() {
 
 function renderSummary() {
   const rep = detail.report;
-  $("summary").textContent = detail.summary_txt ||
-    (detail.pending ? `Pending approval since ${detail.pending.at}.` : "—") +
+  const waiting = detail.pending ? `Pending approval since ${detail.pending.at}.`
+    : detail.status ? `stage: ${detail.status.stage} (${detail.status.at}).` : "—";
+  $("summary").textContent = (detail.summary_txt || waiting) +
     (rep ? `\nmode=${rep.mode} approved=${rep.approved} deployed=${rep.deployed} ` +
       `fixes=${rep.logic_fixes_used} tokens=${rep.input_tokens}/${rep.output_tokens}` : "");
 }
@@ -346,8 +384,85 @@ function tickLive() {
   }).catch(() => {});
 }
 
-$("runSel").onchange = (e) => loadDetail(e.target.value);
+const EXAMPLE_TESTS = `- name: start_latches_lamp
+  stimulus:
+    - {at_ms: 0, press: start_btn}
+    - {at_ms: 200, release: start_btn}
+  expect:
+    - {signal: lamp_red, value: true, within_ms: 500}
+    - {signal: arm_angle, value: 90, tolerance: 10, within_ms: 1500}
+`;
+const EXAMPLE_SIGNALS = ["start_btn", "stop_btn", "lamp_red", "arm_angle"];
+let following = null;
+
+async function loadIoMap() {
+  const box = $("sigBoxes");
+  try {
+    const res = await fetch("/api/io-map");
+    const data = await res.json();
+    box.innerHTML = "";
+    for (const s of data.signals || []) {
+      const lab = document.createElement("label");
+      lab.title = `${s.type} ${s.direction} ${s.iec} (${s.modbus})`;
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.value = s.name;
+      cb.checked = EXAMPLE_SIGNALS.includes(s.name);
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(` ${s.name} (${s.iec})`));
+      box.appendChild(lab);
+    }
+  } catch (e) {
+    box.innerHTML = `<span class="muted">io_map unavailable: ${esc(String(e))}</span>`;
+  }
+}
+
+async function postJson(path, body) {
+  const res = await fetch(path, {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  return [res.status, await res.json()];
+}
+
+async function generate() {
+  const msg = $("taskMsg");
+  const signals = [...$("sigBoxes").querySelectorAll("input:checked")].map((c) => c.value);
+  msg.textContent = "validating spec…";
+  const [s1, task] = await postJson("/api/tasks", {
+    task_id: $("taskId").value.trim(),
+    description: $("taskDesc").value,
+    signals,
+    tests: $("taskTests").value,
+    overwrite: $("taskOverwrite").checked,
+  });
+  if (!task.ok) { msg.textContent = `spec error: ${task.error}`; return; }
+  msg.textContent = "starting loop…";
+  const [s2, run] = await postJson("/api/runs/start", {
+    task_id: task.task_id, mode: $("runMode").value,
+  });
+  if (!run.ok) { msg.textContent = `start error: ${run.error}`; return; }
+  msg.textContent = `run ${run.run_id} started — code appears below as it is generated.`;
+  following = run.run_id;
+  await loadRuns();
+  $("runSel").value = run.run_id;
+  await loadDetail(run.run_id);
+}
+
+async function pollFollowed() {
+  if (!following || document.hidden) return;
+  const res = await fetch(`/api/runs/${encodeURIComponent(following)}`);
+  detail = await res.json();
+  if ($("runSel").value === following) {
+    renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
+    renderFrames();
+  }
+  if (detail.report) { following = null; await loadRuns(); }
+}
+
+$("runSel").onchange = (e) => { following = null; loadDetail(e.target.value); };
 $("refreshBtn").onclick = loadRuns;
+$("newTaskBtn").onclick = () => $("newTask").classList.toggle("show");
+$("exampleBtn").onclick = () => { $("taskTests").value = EXAMPLE_TESTS; };
+$("generateBtn").onclick = generate;
+$("taskTests").value = EXAMPLE_TESTS;
 $("snapSel").onchange = renderCode;
 $("diffBtn").onclick = showDiff;
 $("codeTabs").querySelectorAll("button").forEach((b) => {
@@ -357,8 +472,10 @@ $("codeTabs").querySelectorAll("button").forEach((b) => {
   };
 });
 loadRuns();
+loadIoMap();
 setInterval(tickLive, 1000);
 setInterval(loadRuns, 15000);
+setInterval(pollFollowed, 2000);
 tickLive();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"

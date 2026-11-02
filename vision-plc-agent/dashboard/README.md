@@ -20,8 +20,16 @@ uv run python -m agent.loop specs/start_lamp_arm.yaml --fake \
   --wait-approval 300 --out /tmp/demo-run
 ```
 
+Or use the **New task** form in the page: type a description, pick
+signals, paste the acceptance tests as YAML, click Generate — the
+dashboard writes `specs/<task_id>.yaml`, starts the loop, and the code
+appears in the page as it is generated (fake mode runs end to end;
+real mode waits for the Approve button before deploying). One run at a
+time: starting while a run is active returns 409.
+
 API: `GET /api/runs`, `GET /api/pending`, `GET /api/runs/<id>`,
 `GET /api/runs/<id>/diff?from=<snap>&to=<snap>`,
 `GET /api/runs/<id>/frames/<name>`, `POST /api/runs/<id>/approve`,
 `GET /api/preview.jpg` (live frame service → newest run frame →
-placeholder). See [DEMO.md](DEMO.md) for the rehearsal script.
+placeholder), `GET /api/io-map`, `POST /api/tasks`,
+`POST /api/runs/start`. See [DEMO.md](DEMO.md) for the rehearsal script.

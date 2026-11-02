@@ -17,19 +17,18 @@ frame from the last run.
 
 ## 1. Show the rig, state the task
 
-Task file: `specs/start_lamp_arm.yaml`. Show it in the dashboard
-(spec tab) or `cat` it in the terminal.
+Click **New task**: type the description, tick the signals, keep the
+example tests (or paste your own), click **Generate & run**. The
+dashboard writes `specs/<task_id>.yaml` and starts the loop — no
+terminal needed. (CLI alternative:
+`uv run python -m agent.loop specs/start_lamp_arm.yaml --fake --wait-approval 300`.)
 
 ## 2. Agent shows diagram + ST, you approve
 
-```bash
-uv run python -m agent.loop specs/start_lamp_arm.yaml --fake \
-  --wait-approval 300 --out /tmp/demo-run-1
-```
-
-The loop writes `pending_approval.json` and waits. The dashboard banner
-turns yellow: review diagram + `main.st`, click **Approve & deploy**.
-The run continues and the timeline fills in green.
+Watch the code tab: `main.st` appears as soon as codegen passes. In
+real mode the loop then waits and the banner turns yellow: review
+diagram + `main.st`, click **Approve & deploy**. The run continues and
+the timeline fills in green. (Fake mode auto-approves.)
 
 ## 3. Deployment + physical test, all green
 

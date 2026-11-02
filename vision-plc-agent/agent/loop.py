@@ -59,6 +59,7 @@ FAKE_PROGRAM_ZIP = b"fake-program-zip: no packager in --fake mode"
 RUN_ID_FORMAT = "%Y%m%dT%H%M%SZ"
 PENDING_APPROVAL_FILE = "pending_approval.json"
 APPROVAL_FILE = "approved.json"
+STATUS_FILE = "status.json"
 APPROVAL_POLL_S = 1.0
 
 SleepFn = Callable[[float], None]
@@ -543,6 +544,37 @@ def wait_for_dashboard_approval(
     return _wait
 
 
+def write_status(run_dir: Path, stage: str, **extra: object) -> None:
+    """Best-effort progress marker so the dashboard can follow a live run.
+
+    Never raises: a failed marker must not fail the run it describes.
+    """
+    try:
+        run_dir = Path(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, object] = {
+            "run_id": run_dir.name,
+            "stage": stage,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        payload.update(extra)
+        (run_dir / STATUS_FILE).write_text(json.dumps(payload, indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def write_code_files(run_dir: Path, files: ProgramFiles, diagram: str) -> None:
+    """Publish the current diagram/ST mid-run; the final write overwrites."""
+    try:
+        run_dir = Path(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "diagram.mmd").write_text(diagram, encoding="utf-8")
+        (run_dir / "main.st").write_text(files.main_st, encoding="utf-8")
+        (run_dir / "tests.st").write_text(files.tests_st, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def deploy_real(
     files: ProgramFiles,
     workdir: Path,
@@ -723,13 +755,15 @@ def run_loop(
     report.codegen = codegen.to_dict()
     files = codegen.files
     diagram = codegen.diagram
-    (run_dir / "diagram.mmd").write_text(diagram, encoding="utf-8")
+    write_code_files(run_dir, files, diagram)
     if not codegen.passed:
         report.summary = _summarise(report, spec)
+        write_status(run_dir, "done", verdict=report.overall_verdict)
         _write_run_files(run_dir, spec, files, report, calibration)
         return report
 
     # Step 4: human approval before any deploy.
+    write_status(run_dir, "awaiting_approval")
     approver = approve_fn if approve_fn is not None else prompt_for_approval
     report.approved = bool(approver(files, diagram))
     approval_path = run_dir / APPROVAL_FILE
@@ -741,18 +775,22 @@ def run_loop(
     if not report.approved:
         report.overall_verdict = "not_approved"
         report.summary = _summarise(report, spec)
+        write_status(run_dir, "done", verdict=report.overall_verdict)
         _write_run_files(run_dir, spec, files, report, calibration)
         return report
 
     # Step 5: deploy.
+    write_status(run_dir, "deploying")
     try:
         _deploy(files)
     except (PlcError, PackagerError, StrucppNotFoundError, OSError) as exc:
         report.overall_verdict = "deploy_failed"
         report.summary = f"deploy failed: {exc}\n" + _summarise(report, spec)
+        write_status(run_dir, "done", verdict=report.overall_verdict)
         _write_run_files(run_dir, spec, files, report, calibration)
         return report
     report.deployed = True
+    write_status(run_dir, "testing")
 
     # Steps 6-10: calibrate once (caller-supplied), test, diagnose, repair.
     physical_repairs: list[dict[str, object]] = []
@@ -821,13 +859,19 @@ def run_loop(
             if not check.passed:
                 evidence += "\n\nOFFLINE CHECK STILL FAILS:\n" + check.errors_verbatim
                 continue  # next round repairs the offline errors too
+            write_code_files(run_dir, files, diagram)
+            write_status(
+                run_dir, "repairing", fix=report.logic_fixes_used, max_fixes=max_logic_fixes
+            )
             try:
                 _deploy(files)
             except (PlcError, PackagerError, StrucppNotFoundError, OSError) as exc:
                 report.overall_verdict = "deploy_failed"
                 report.summary = f"re-deploy failed: {exc}\n" + _summarise(report, spec)
+                write_status(run_dir, "done", verdict=report.overall_verdict)
                 _write_run_files(run_dir, spec, files, report, calibration)
                 return report
+            write_status(run_dir, "testing")
     finally:
         try:
             force_safe_state(io_map, plc, writer, spec.signals)
@@ -835,6 +879,7 @@ def run_loop(
             pass
     report.codegen["physical_repairs"] = physical_repairs
     report.summary = _summarise(report, spec)
+    write_status(run_dir, "done", verdict=report.overall_verdict)
     _write_run_files(run_dir, spec, files, report, calibration)
     return report
 
