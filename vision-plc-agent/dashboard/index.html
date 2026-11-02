@@ -6,15 +6,20 @@
 <title>Vision PLC Agent — Dashboard</title>
 <style>
   :root {
-    --bg: #eef0f2; --panel: #ffffff; --ink: #1c2026; --muted: #5b6470;
-    --line: #d7dbe0; --accent: #0f5fd0; --pass: #177245; --fail: #b3261e;
+    --bg: #e9edf2; --panel: #ffffff; --ink: #1c2026; --muted: #5b6470;
+    --line: #d5dae2; --accent: #2563eb; --navy: #1b2440;
+    --pass: #177245; --fail: #b3261e;
     --warn: #8a5a00; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  ::selection { background: #c7d2fe; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   body { margin: 0; background: var(--bg); color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; }
-  header { background: #20262e; color: #f2f4f7; padding: 10px 16px;
-    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header { background: var(--navy); color: #f2f4f7; padding: 10px 16px 13px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; position: relative; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6, #06b6d4); }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   header select, header button { font-size: 13px; padding: 5px 8px; }
   header .spacer { flex: 1; }
@@ -51,11 +56,11 @@
   .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
   .tabs button { border: 1px solid var(--line); background: #f4f6f8; border-radius: 6px;
     padding: 4px 10px; font-size: 13px; cursor: pointer; }
-  .tabs button.sel { background: #20262e; color: #fff; border-color: #20262e; }
-  pre.code { background: #20262e; color: #e8ecf1; padding: 10px; border-radius: 6px;
+  .tabs button.sel { background: var(--navy); color: #fff; border-color: var(--navy); }
+  pre.code { background: var(--navy); color: #e8ecf1; padding: 10px; border-radius: 6px;
     overflow: auto; max-height: 420px; font-family: var(--mono); font-size: 12px; margin: 0; }
   pre.code .add { color: #7ee2a8; } pre.code .del { color: #ff9d94; }
-  pre.code .hunk { color: #9fc5ff; }
+  pre.code .hunk { color: #a5b4fc; }
   .test { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 8px; }
   .test > summary { padding: 8px 10px; cursor: pointer; font-weight: 600; }
   .test table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -77,6 +82,42 @@
   #sigBoxes label { font-weight: 400; margin: 0; display: flex; gap: 4px; align-items: center; }
   #generateBtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
     padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
+  /* Live progress card shown under "Generate & run" while a run is followed. */
+  #progress { display: none; position: relative; margin-top: 12px; padding: 14px 16px 16px;
+    border-radius: 10px; color: #eef2ff; overflow: hidden; isolation: isolate;
+    background: linear-gradient(120deg, #1b2440, #2a1f4a 45%, #10324a); }
+  #progress.show { display: block; }
+  #progress::before { content: ""; position: absolute; inset: -40%; z-index: -1;
+    background: conic-gradient(from 0deg, #3b82f6, #8b5cf6, #ec4899, #06b6d4, #3b82f6);
+    filter: blur(48px); opacity: .35; animation: spin 9s linear infinite; }
+  #progress .top { display: flex; align-items: baseline; gap: 10px; }
+  #progress .stage { font-size: 15px; font-weight: 600; letter-spacing: .01em; }
+  #progress .elapsed { margin-left: auto; font-family: var(--mono); font-size: 13px;
+    color: #c7d2fe; font-variant-numeric: tabular-nums; }
+  #progress .hint { font-size: 12px; color: #aab4d4; margin-top: 2px; }
+  #progress .bar { position: relative; height: 6px; margin-top: 12px; border-radius: 999px;
+    background: rgba(255,255,255,.12); overflow: hidden; }
+  #progress .bar::after { content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: linear-gradient(90deg, transparent, #60a5fa, #a78bfa, #f472b6, #22d3ee, transparent);
+    background-size: 50% 100%; background-repeat: no-repeat;
+    animation: sweep 1.6s cubic-bezier(.45,.05,.55,.95) infinite; }
+  @keyframes sweep { from { background-position: -100% 0; } to { background-position: 200% 0; } }
+  #progress .steps { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+  #progress .step { flex: 1; min-width: 70px; text-align: center; font-size: 11px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: .05em; padding: 5px 6px;
+    border-radius: 999px; color: #8f9ac0; background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.08); transition: all .3s; }
+  #progress .step.done { color: #bbf7d0; background: rgba(34,197,94,.16);
+    border-color: rgba(34,197,94,.35); }
+  #progress .step.active { color: #fff; border-color: transparent;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899, #3b82f6);
+    background-size: 300% 100%; animation: flow 3s linear infinite;
+    box-shadow: 0 0 14px rgba(139,92,246,.55); }
+  @keyframes flow { to { background-position: 300% 0; } }
+  #progress.wait .bar::after { animation-duration: 3.2s; opacity: .6; }
+  @media (prefers-reduced-motion: reduce) {
+    #progress::before, #progress .bar::after, #progress .step.active { animation: none; }
+  }
 </style>
 </head>
 <body>
@@ -119,6 +160,20 @@
       </div>
       <button id="generateBtn" type="button">Generate &amp; run</button>
       <span id="taskMsg" class="muted"></span>
+      <div id="progress" role="status" aria-live="polite">
+        <div class="top">
+          <span class="stage" id="progStage">Starting…</span>
+          <span class="elapsed" id="progElapsed">0:00</span>
+        </div>
+        <div class="hint" id="progHint">Code appears below as it is generated.</div>
+        <div class="bar"></div>
+        <div class="steps">
+          <span class="step" data-step="generate">Generate</span>
+          <span class="step" data-step="approve">Approve</span>
+          <span class="step" data-step="deploy">Deploy</span>
+          <span class="step" data-step="test">Test</span>
+        </div>
+      </div>
     </section>
     <section>
       <h2>PLC</h2>
@@ -498,7 +553,7 @@ async function generate() {
   });
   if (!run.ok) { msg.textContent = `start error: ${run.error}`; return; }
   setFollowing(run.run_id);
-  msg.textContent = `run ${run.run_id}: starting… — code appears below as it is generated.`;
+  msg.textContent = `run ${run.run_id}`;
   await loadRuns();
   $("runSel").value = run.run_id;
   await loadDetail(run.run_id);
@@ -506,11 +561,52 @@ async function generate() {
 
 let followStart = 0;
 
+const STAGES = {
+  starting: ["generate", "Starting the agent…", "Spinning up the loop."],
+  generating: ["generate", "Writing Structured Text…",
+    "Muse Spark is drafting the program; code appears below as it streams."],
+  awaiting_approval: ["approve", "Waiting for your approval",
+    "Review the ST, then press Approve & deploy in the banner at the top."],
+  deploying: ["deploy", "Deploying to the PLC…", "Packaging and uploading the program."],
+  testing: ["test", "Running acceptance tests…", "Pressing buttons, reading tags, grabbing frames."],
+  repairing: ["test", "Repairing the logic…", "A test failed; the agent is fixing the ST."],
+};
+const STEP_ORDER = ["generate", "approve", "deploy", "test"];
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function renderProgress(stage, status) {
+  const box = $("progress");
+  box.classList.toggle("show", following !== null);
+  if (following === null) return;
+  const [step, label, hint] = STAGES[stage] || ["generate", `${stage}…`, ""];
+  let text = label;
+  if (stage === "repairing" && status && status.fix) text += ` (fix ${status.fix}/${status.max_fixes})`;
+  $("progStage").textContent = text;
+  $("progHint").textContent = hint;
+  box.classList.toggle("wait", stage === "awaiting_approval");
+  const at = STEP_ORDER.indexOf(step);
+  box.querySelectorAll(".step").forEach((el) => {
+    const i = STEP_ORDER.indexOf(el.dataset.step);
+    el.classList.toggle("done", i < at);
+    el.classList.toggle("active", i === at);
+  });
+}
+
+function tickProgress() {
+  if (following !== null) $("progElapsed").textContent = fmtElapsed(Date.now() - followStart);
+}
+
 function setFollowing(runId) {
   following = runId;
   followStart = Date.now();
   $("generateBtn").disabled = runId !== null;
   if (runId === null) $("liveSpin").hidden = true;
+  tickProgress();
+  renderProgress("starting", null);
 }
 
 function stageOf(d) {
@@ -546,9 +642,8 @@ async function pollFollowed() {
     await loadRuns();
     return;
   }
-  const elapsed = Math.round((Date.now() - followStart) / 1000);
-  $("taskMsg").textContent =
-    `run ${following}: ${stage}… (${elapsed}s) — code appears below as it is generated.`;
+  $("taskMsg").textContent = `run ${following}`;
+  renderProgress(stage, detail.status);
 }
 
 $("runSel").onchange = (e) => { setFollowing(null); loadDetail(e.target.value); };
@@ -572,6 +667,7 @@ setInterval(tickLive, 1000);
 setInterval(loadRuns, 15000);
 setInterval(() => { if (!document.hidden) plcAction("status"); }, 10000);
 setInterval(pollFollowed, 2000);
+setInterval(tickProgress, 1000);
 tickLive();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
