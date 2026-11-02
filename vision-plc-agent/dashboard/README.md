@@ -21,15 +21,22 @@ uv run python -m agent.loop specs/start_lamp_arm.yaml --fake \
 ```
 
 Or use the **New task** form in the page: type a description, pick
-signals, paste the acceptance tests as YAML, click Generate — the
-dashboard writes `specs/<task_id>.yaml`, starts the loop, and the code
-appears in the page as it is generated (fake mode runs end to end;
-real mode waits for the Approve button before deploying). One run at a
-time: starting while a run is active returns 409.
+signals, click Generate & run. With the tests box left empty the
+dashboard writes a *brief* (`specs/<task_id>.yaml` without `tests`) and
+the run drafts the acceptance tests with Muse Spark first: they appear
+in an editable **Acceptance tests** panel; edit if needed and click
+**Approve tests & generate code** (or Reject). The server validates the
+edit, fills the tests into `specs/<task_id>.yaml`, and the loop goes on
+to generate the ST; then the usual **Approve & deploy** gate. Brief runs
+wait for both gates in fake mode too, so the flow can be rehearsed
+without the Pi. Paste YAML into the tests box to skip drafting. One run
+at a time: starting while a run is active returns 409.
 
 API: `GET /api/runs`, `GET /api/pending`, `GET /api/runs/<id>`,
 `GET /api/runs/<id>/diff?from=<snap>&to=<snap>`,
 `GET /api/runs/<id>/frames/<name>`, `POST /api/runs/<id>/approve`,
+`POST /api/runs/<id>/approve-tests` (`{tests_yaml, by}`),
+`POST /api/runs/<id>/reject-tests`,
 `GET /api/preview.jpg` (live frame service → newest run frame →
 placeholder), `GET /api/io-map`, `POST /api/tasks`,
 `POST /api/runs/start`. See [DEMO.md](DEMO.md) for the rehearsal script.

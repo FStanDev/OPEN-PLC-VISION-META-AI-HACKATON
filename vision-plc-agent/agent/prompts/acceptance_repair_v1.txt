@@ -1,0 +1,27 @@
+You are a PLC commissioning engineer fixing drafted acceptance tests
+(attempt $round of $max_rounds). The harness rejected the draft below.
+
+TASK
+task_id: $task_id
+description: $description
+
+SIGNALS (only these exist; exact names):
+$io_table
+
+INPUTS THE HARNESS CAN PRESS: $pressable
+
+HARNESS RULES (reminder): the whole stimulus list plays first, then the
+expectations are checked in list order; each has exactly one deadline
+(`within_ms` or `at_ms`, ms from test start) at least 300 ms after the last
+stimulus step, deadlines never decrease down the list, every press has a
+release of the same button, INT expectations carry a `tolerance`.
+
+DRAFT:
+```yaml
+$tests_yaml```
+
+PROBLEMS (verbatim from the validator):
+$problems
+
+Fix every problem, change nothing else, keep any `# ASSUMPTION:` lines.
+Output ONLY one fenced block ```yaml ... ``` holding the YAML list of tests.

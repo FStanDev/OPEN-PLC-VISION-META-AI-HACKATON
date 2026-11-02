@@ -80,6 +80,14 @@
   #newTask textarea { font-family: var(--mono); font-size: 12px; }
   #sigBoxes { display: flex; gap: 10px; flex-wrap: wrap; }
   #sigBoxes label { font-weight: 400; margin: 0; display: flex; gap: 4px; align-items: center; }
+  #testsReview { display: none; border: 2px solid #e3c76a; }
+  #testsReview.show { display: block; }
+  #reviewTests { width: 100%; font-family: var(--mono); font-size: 12px; padding: 8px;
+    border: 1px solid var(--line); border-radius: 6px; background: #fbfcfd; }
+  #reviewProblems { margin: 6px 0; padding-left: 18px; font-size: 12px; }
+  #reviewProblems li.fail { color: var(--fail); } #reviewProblems li.warn { color: var(--warn); }
+  #approveTestsBtn { background: var(--pass); color: #fff; border: 0; border-radius: 6px;
+    padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
   #generateBtn { background: var(--accent); color: #fff; border: 0; border-radius: 6px;
     padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
   /* Live progress card shown under "Generate & run" while a run is followed. */
@@ -138,15 +146,15 @@
 <main>
   <div>
     <section id="newTask">
-      <h2>New task — describe it, the agent writes the ST</h2>
+      <h2>New task — describe it, the agent writes the tests and the ST</h2>
       <label for="taskId">task_id</label>
-      <input type="text" id="taskId" value="demo_task" autocomplete="off">
+      <input type="text" id="taskId" value="green_red_on" autocomplete="off">
       <label for="taskDesc">description (plain English)</label>
-      <textarea id="taskDesc" rows="3">When start is pressed, latch the red lamp on. Stop turns everything off.</textarea>
+      <textarea id="taskDesc" rows="3">When start is pressed, latch the green lamp on. Stop turns everything off leaving red lamp on for 3 seconds.</textarea>
       <label>signals (from io_map.yaml)</label>
       <div id="sigBoxes"><span class="muted">loading…</span></div>
-      <label for="taskTests">acceptance tests (YAML list)</label>
-      <textarea id="taskTests" rows="9"></textarea>
+      <label for="taskTests">acceptance tests (YAML list) — leave empty and Muse Spark drafts them for your approval</label>
+      <textarea id="taskTests" rows="6" placeholder="empty: the agent drafts the acceptance tests from the description; you review and approve them before any code is written"></textarea>
       <div class="row" style="margin-top:8px">
         <label class="muted" for="runMode" style="margin:0">mode</label>
         <select id="runMode" style="width:auto">
@@ -168,6 +176,7 @@
         <div class="hint" id="progHint">Code appears below as it is generated.</div>
         <div class="bar"></div>
         <div class="steps">
+          <span class="step" data-step="tests">Tests</span>
           <span class="step" data-step="generate">Generate</span>
           <span class="step" data-step="approve">Approve</span>
           <span class="step" data-step="deploy">Deploy</span>
@@ -199,6 +208,17 @@
     </section>
   </div>
   <div>
+    <section id="testsReview">
+      <h2>Acceptance tests — drafted by Muse Spark, awaiting your approval</h2>
+      <div id="reviewInfo" class="muted" style="margin-bottom:6px"></div>
+      <ul id="reviewProblems"></ul>
+      <textarea id="reviewTests" rows="18" spellcheck="false"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="approveTestsBtn" type="button">Approve tests &amp; generate code</button>
+        <button id="rejectTestsBtn" type="button">Reject</button>
+        <span id="reviewMsg" class="muted"></span>
+      </div>
+    </section>
     <section>
       <h2>Spec &amp; code</h2>
       <div class="tabs" id="codeTabs">
@@ -266,6 +286,23 @@ function showPending(list) {
   if (!list.length) { bar.classList.remove("show"); return; }
   bar.classList.add("show");
   const p = list[0];
+  if (p.pending_tests) {
+    $("pendingText").textContent =
+      `Run ${p.run_id} (${p.task_id || "?"}): acceptance tests drafted — ` +
+      `review or edit them, then approve to generate the code.`;
+    $("approveBtn").textContent = "Approve tests & generate code";
+    $("approveBtn").onclick = async () => {
+      if (!detail || detail.run_id !== p.run_id) {
+        $("runSel").value = p.run_id;
+        await loadDetail(p.run_id);
+        $("testsReview").scrollIntoView({behavior: "smooth"});
+        return;
+      }
+      await approveTests();
+    };
+    return;
+  }
+  $("approveBtn").textContent = "Approve & deploy";
   $("pendingText").textContent =
     `Run ${p.run_id} (${p.task_id || "?"}) awaits approval — ` +
     `review the code, then approve to deploy.`;
@@ -285,7 +322,54 @@ async function loadDetail(runId) {
   detail = await res.json();
   $("liveSpin").hidden = !(detail.live && !detail.report);
   renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
-  renderFrames();
+  renderFrames(); renderTestsReview();
+}
+
+let testsReviewKey = null;  // refill the editor only for a new draft: never clobber edits
+
+function renderTestsReview() {
+  const box = $("testsReview"), d = detail && detail.tests_draft;
+  if (!d || !detail.pending_tests) { box.classList.remove("show"); testsReviewKey = null; return; }
+  box.classList.add("show");
+  const key = `${detail.run_id}|${d.at}`;
+  if (key === testsReviewKey) return;
+  testsReviewKey = key;
+  $("reviewTests").value = d.tests_yaml || "";
+  $("reviewMsg").textContent = "";
+  const brief = d.brief || {};
+  $("reviewInfo").textContent =
+    `“${brief.description || "?"}” — signals: ${(brief.signals || []).join(", ")}. ` +
+    `Drafted in ${d.attempts || 1} attempt(s). The ST code is generated and judged against ` +
+    `these tests; “# ASSUMPTION” lines are the model's reading of the description.`;
+  const probs = [...(d.errors || []).map((e) => ["fail", e]),
+    ...(d.warnings || []).map((w) => ["warn", w])];
+  $("reviewProblems").innerHTML = probs.map(([c, t]) => `<li class="${c}">${esc(t)}</li>`).join("");
+}
+
+async function approveTests() {
+  const runId = detail.run_id, msg = $("reviewMsg");
+  msg.textContent = "validating…";
+  const [, out] = await postJson(`/api/runs/${encodeURIComponent(runId)}/approve-tests`,
+    {tests_yaml: $("reviewTests").value, by: "dashboard"});
+  if (!out.approved) {
+    msg.textContent = `not accepted: ${out.error}`;
+    $("approveMsg").textContent = "fix the tests in the review panel";
+    return;
+  }
+  const n = (out.warnings || []).length;
+  msg.textContent = `approved${n ? ` (${n} timing warning(s) kept)` : ""} — generating code…`;
+  $("approveMsg").textContent = "";
+  $("pending").classList.remove("show");
+  await loadRuns();
+}
+
+async function rejectTests() {
+  const runId = detail.run_id;
+  const [, out] = await postJson(`/api/runs/${encodeURIComponent(runId)}/reject-tests`,
+    {by: "dashboard"});
+  $("reviewMsg").textContent = out.rejected
+    ? "rejected — the run ends, no code generated." : `error: ${out.error}`;
+  await loadRuns();
 }
 
 function renderVerdict() {
@@ -301,7 +385,9 @@ function renderVerdict() {
 function renderTimeline() {
   const box = $("timeline"), rep = detail.report;
   if (!rep || !rep.tests || !rep.tests.length) {
-    box.innerHTML = `<span class="muted">${detail.pending ? "Awaiting approval — no tests yet." : "No tests."}</span>`;
+    const why = detail.pending_tests ? "Acceptance tests awaiting approval."
+      : detail.pending ? "Awaiting approval — no tests yet." : "No tests.";
+    box.innerHTML = `<span class="muted">${why}</span>`;
     return;
   }
   box.innerHTML = "";
@@ -354,7 +440,9 @@ function renderCode() {
   mw.innerHTML = "";
   if (codeViewName === "spec") {
     const spec = detail.report ? null : detail.pending ? detail.pending.spec : null;
-    view.textContent = detail.spec_yaml || (spec ? JSON.stringify(spec, null, 2) : "—");
+    const draft = detail.tests_draft;
+    view.textContent = detail.spec_yaml || (spec ? JSON.stringify(spec, null, 2)
+      : draft ? `# drafted acceptance tests (not approved yet)\n${draft.tests_yaml}` : "—");
     return;
   }
   if (codeViewName === "diagram") {
@@ -462,15 +550,26 @@ function tickLive() {
   }).catch(() => {}).finally(() => { liveBusy = false; });
 }
 
-const EXAMPLE_TESTS = `- name: start_latches_lamp
+// Hand-written tests for the default description ("Load example"). Optional:
+// leave the box empty and the agent drafts them for approval.
+const EXAMPLE_TESTS = `- name: start_latches_green
   stimulus:
     - {at_ms: 0, press: start_btn}
     - {at_ms: 200, release: start_btn}
   expect:
-    - {signal: lamp_red, value: true, within_ms: 500}
-    - {signal: arm_angle, value: 90, tolerance: 10, within_ms: 1500}
+    - {signal: lamp_green, value: true, within_ms: 500}
+- name: stop_shows_red_then_safe
+  stimulus:
+    - {at_ms: 0, press: start_btn}
+    - {at_ms: 200, release: start_btn}
+    - {at_ms: 1000, press: stop_btn}
+    - {at_ms: 1200, release: stop_btn}
+  expect:
+    - {signal: lamp_green, value: false, within_ms: 1500}
+    - {signal: lamp_red, value: true, within_ms: 1700}
+    - {signal: lamp_red, value: false, at_ms: 5000}
 `;
-const EXAMPLE_SIGNALS = ["start_btn", "stop_btn", "lamp_red", "arm_angle"];
+const EXAMPLE_SIGNALS = ["start_btn", "stop_btn", "lamp_red", "lamp_green"];
 let following = null;
 
 async function plcAction(action) {
@@ -562,7 +661,11 @@ async function generate() {
 let followStart = 0;
 
 const STAGES = {
-  starting: ["generate", "Starting the agent…", "Spinning up the loop."],
+  starting: ["tests", "Starting the agent…", "Spinning up the loop."],
+  drafting_tests: ["tests", "Drafting acceptance tests…",
+    "Muse Spark is turning the description into timed stimulus + expectations."],
+  awaiting_tests_approval: ["tests", "Waiting for your test approval",
+    "Review or edit the drafted tests on the right, then press Approve tests & generate code."],
   generating: ["generate", "Writing Structured Text…",
     "Muse Spark is drafting the program; code appears below as it streams."],
   awaiting_approval: ["approve", "Waiting for your approval",
@@ -571,7 +674,7 @@ const STAGES = {
   testing: ["test", "Running acceptance tests…", "Pressing buttons, reading tags, grabbing frames."],
   repairing: ["test", "Repairing the logic…", "A test failed; the agent is fixing the ST."],
 };
-const STEP_ORDER = ["generate", "approve", "deploy", "test"];
+const STEP_ORDER = ["tests", "generate", "approve", "deploy", "test"];
 
 function fmtElapsed(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -587,7 +690,7 @@ function renderProgress(stage, status) {
   if (stage === "repairing" && status && status.fix) text += ` (fix ${status.fix}/${status.max_fixes})`;
   $("progStage").textContent = text;
   $("progHint").textContent = hint;
-  box.classList.toggle("wait", stage === "awaiting_approval");
+  box.classList.toggle("wait", stage === "awaiting_approval" || stage === "awaiting_tests_approval");
   const at = STEP_ORDER.indexOf(step);
   box.querySelectorAll(".step").forEach((el) => {
     const i = STEP_ORDER.indexOf(el.dataset.step);
@@ -630,7 +733,7 @@ async function pollFollowed() {
   detail = await res.json();
   if ($("runSel").value === following) {
     renderVerdict(); renderTimeline(); renderSummary(); renderSnapshots(); renderCode();
-    renderFrames();
+    renderFrames(); renderTestsReview();
   }
   const stage = stageOf(detail);
   const done = detail.report !== null || stage === "error";
@@ -644,14 +747,27 @@ async function pollFollowed() {
   }
   $("taskMsg").textContent = `run ${following}`;
   renderProgress(stage, detail.status);
+  if (detail.pending_tests || detail.pending) {
+    // Approval gates appear without waiting for the 15 s runs refresh.
+    const pend = await (await fetch("/api/pending")).json();
+    showPending(pend.pending);
+  }
 }
 
-$("runSel").onchange = (e) => { setFollowing(null); loadDetail(e.target.value); };
+$("runSel").onchange = (e) => {
+  // A past run is read-only: hide the composer so it can't be mistaken for
+  // editing that run. Fields are never cleared, so toggling New task back
+  // restores the in-progress draft exactly as left.
+  setFollowing(null);
+  $("newTask").classList.remove("show");
+  loadDetail(e.target.value);
+};
 $("refreshBtn").onclick = loadRuns;
 $("newTaskBtn").onclick = () => $("newTask").classList.toggle("show");
 $("exampleBtn").onclick = () => { $("taskTests").value = EXAMPLE_TESTS; };
 $("generateBtn").onclick = generate;
-$("taskTests").value = EXAMPLE_TESTS;
+$("approveTestsBtn").onclick = approveTests;
+$("rejectTestsBtn").onclick = rejectTests;
 $("snapSel").onchange = renderCode;
 $("diffBtn").onclick = showDiff;
 $("codeTabs").querySelectorAll("button").forEach((b) => {

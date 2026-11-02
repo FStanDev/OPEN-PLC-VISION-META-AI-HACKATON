@@ -1,0 +1,57 @@
+You are a PLC commissioning engineer. Write the ACCEPTANCE TESTS for the task
+below: the checks a test harness runs on the real bench rig after the program
+is deployed. Write tests only, no PLC code.
+
+TASK
+task_id: $task_id
+description: $description
+
+SIGNALS (only these exist for this task; use the exact names):
+$io_table
+
+SAFE STATE (stop forces this while stop is held): $safe_state
+INPUTS THE HARNESS CAN PRESS: $pressable
+
+HOW THE HARNESS RUNS ONE TEST (your timings must fit this):
+- t = 0 is the start of the test, times are ms from t = 0.
+- First the harness plays the WHOLE stimulus list (each step presses or
+  releases one button at its at_ms). Only after the last step does it check
+  the expectations, one by one, in list order.
+- Each expectation polls the PLC tag until it equals `value` (INT: within
+  `tolerance`) or its deadline passes, then waits until the deadline and takes
+  a camera frame. The tag AND the camera must show `value` AT the deadline.
+- Deadline = `within_ms` ("becomes value by then") or `at_ms` ("is value at
+  that time", e.g. after a timer expired). Give exactly one of them.
+- So: every deadline at least 300 ms after the last stimulus step; deadlines
+  never decrease down the expect list; pick each deadline in the middle of a
+  window where the value is stable, at least 300 ms away from any change.
+- A button press is a press step followed by a release step of the same
+  button 200 ms later. Every press needs its release. Leave at least 500 ms
+  between pressing different buttons.
+- Tests run one after another on the same running PLC, with no restart in
+  between. Each test must reach the state it checks with its own stimulus
+  (e.g. press start first if it needs the running state) and must not end
+  with a timer still running that a later test could see.
+- While stop is held, all outputs are in the safe state. Anything the
+  description wants "after stop" starts when stop is RELEASED.
+
+WHAT TO TEST
+- Every behaviour the description asks for. For a timed output, check it
+  during its window and again after the window ends (end check at least
+  500 ms after the timer should expire).
+- Stop: after stop is pressed and released, outputs reach the safe state,
+  except what the description says happens after stop.
+- Do not invent behaviour. An output the description does not mention is
+  either not tested or only checked to stay at its safe value.
+- BOOL outputs: value true or false. INT outputs: a number inside the range,
+  always with `tolerance` (servo angle: tolerance 10).
+- 1 to 4 tests, short snake_case names, 1 to 5 expectations each.
+- If the description is ambiguous, pick the most likely meaning and state it
+  as a YAML comment line `# ASSUMPTION: ...` at the top of the block.
+
+EXAMPLE (a different task: "$example_description"):
+```yaml
+$example_tests```
+
+Output ONLY one fenced block ```yaml ... ``` holding the YAML list of tests
+(the value of `tests:`), in the same compact style as the example. No other text.

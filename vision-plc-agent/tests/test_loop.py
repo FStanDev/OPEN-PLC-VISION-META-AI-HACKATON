@@ -725,3 +725,68 @@ def test_should_leave_running_only_when_tags_match_and_no_fault() -> None:
     assert should_leave_running(run(ok, _result(False, Verdict.VISION_INCONCLUSIVE))) is False
     assert should_leave_running(run(ok, _result(False, Verdict.LOGIC_BUG))) is False
     assert should_leave_running([]) is False
+
+
+BRIEF_YAML = (
+    "task_id: green_red_on\n"
+    "description: When start is pressed, latch the green lamp on. Stop turns everything "
+    "off leaving red lamp on for 3 seconds.\n"
+    "signals: [start_btn, stop_btn, lamp_red, lamp_green]\n"
+)
+
+
+def test_main_fake_brief_drafts_tests_then_runs(tmp_path: Path) -> None:
+    exe = _write_exe(tmp_path / "strucpp", FAKE_PASS)
+    brief = tmp_path / "brief.yaml"
+    brief.write_text(BRIEF_YAML, encoding="utf-8")
+    out = tmp_path / "run"
+    assert main([str(brief), "--fake", "--out", str(out), "--strucpp", str(exe)]) == 0
+    stored = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert stored["verdict"] == "pass"
+    acceptance = stored["codegen"]["acceptance"]
+    assert acceptance["approved"] is True and acceptance["draft"]["passed"] is True
+    assert stored["input_tokens"] >= acceptance["draft"]["input_tokens"] > 0
+    assert len(stored["tests"]) == 2  # the fake draft: press test + stop test
+    assert (out / "acceptance" / "prompt1.txt").is_file()
+    assert "tests:" in (out / "spec.yaml").read_text(encoding="utf-8")
+
+
+def test_draft_spec_not_approved_writes_report(tmp_path: Path) -> None:
+    from agent.acceptance import fake_llm_for_brief
+    from agent.loop import draft_spec
+    from agent.spec import TaskBrief
+
+    io_map = load_io_map()
+    brief = TaskBrief(task_id="b", description="d", signals=["start_btn", "lamp_red"])
+    spec, info = draft_spec(
+        brief,
+        io_map,
+        fake_llm_for_brief(brief, io_map),
+        run_dir=tmp_path,
+        approve_tests=lambda _draft: None,
+        mode="fake",
+    )
+    assert spec is None and info["approved"] is False
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["verdict"] == "tests_not_approved" and report["deployed"] is False
+    assert json.loads((tmp_path / "status.json").read_text())["stage"] == "done"
+
+
+def test_draft_spec_invalid_edit_is_reported(tmp_path: Path) -> None:
+    from agent.acceptance import fake_llm_for_brief
+    from agent.loop import draft_spec
+    from agent.spec import TaskBrief
+
+    io_map = load_io_map()
+    brief = TaskBrief(task_id="b", description="d", signals=["start_btn", "lamp_red"])
+    spec, info = draft_spec(
+        brief,
+        io_map,
+        fake_llm_for_brief(brief, io_map),
+        run_dir=tmp_path,
+        approve_tests=lambda _draft: "- name: [broken",
+        mode="fake",
+    )
+    assert spec is None and info["edited"] is True
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["verdict"] == "tests_invalid"

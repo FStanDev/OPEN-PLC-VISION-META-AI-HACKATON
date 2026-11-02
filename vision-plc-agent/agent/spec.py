@@ -42,17 +42,44 @@ class AcceptanceTest(BaseModel):
     expect: list[Expectation] = Field(min_length=1)
 
 
-class TaskSpec(BaseModel):
+class TaskBrief(BaseModel):
+    """A task without acceptance tests yet: the agent drafts them (step 0)."""
+
     task_id: str
     description: str
     signals: list[str] = Field(min_length=1)
+
+
+class TaskSpec(TaskBrief):
     tests: list[AcceptanceTest] = Field(min_length=1)
+
+    def brief(self) -> TaskBrief:
+        return TaskBrief(task_id=self.task_id, description=self.description, signals=self.signals)
 
 
 def load_task_spec(path: str | Path) -> TaskSpec:
     """Load and validate one task spec file."""
     with Path(path).open("r", encoding="utf-8") as fh:
         return TaskSpec.model_validate(yaml.safe_load(fh))
+
+
+def load_task_file(path: str | Path) -> TaskSpec | TaskBrief:
+    """A full spec, or a brief when ``tests`` is missing or empty."""
+    with Path(path).open("r", encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if isinstance(data, dict) and not data.get("tests"):
+        data = {k: v for k, v in data.items() if k != "tests"}
+        return TaskBrief.model_validate(data)
+    return TaskSpec.model_validate(data)
+
+
+def check_brief_against_io_map(brief: TaskBrief, io_map: IoMap) -> None:
+    """Raise ValueError if the brief names signals outside the I/O map."""
+    unknown = [name for name in brief.signals if name not in io_map.signals]
+    if unknown:
+        raise ValueError(
+            "task does not match io_map: " + "; ".join(f"unknown signal {n!r}" for n in unknown)
+        )
 
 
 def check_against_io_map(spec: TaskSpec, io_map: IoMap) -> None:

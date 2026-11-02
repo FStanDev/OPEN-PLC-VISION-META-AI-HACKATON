@@ -222,8 +222,12 @@ tests:
       - {signal: lamp_red,  value: false, within_ms: 1500}
 ```
 
+The `tests` list may be left out: such a *brief* (task_id, description,
+signals) makes the loop start at step 0.
+
 ### The loop, step by step
 
+0. **Draft acceptance tests** (briefs only). Muse Spark turns the description into timed stimulus + expectations; `agent/acceptance.py` validates them against the schema, the I/O map and the harness timing rules (up to 3 rounds), and the human approves or edits them (dashboard panel or CLI prompt) before any code is written.
 1. **Plan.** Muse Spark reads the spec and writes a Mermaid `stateDiagram-v2` of the intended behaviour, saved next to the spec.
 2. **Generate.** Muse Spark writes one ST `PROGRAM` using only the signals in the spec, plus an ST test file with `TEST` blocks derived from the YAML tests (timers handled with `ADVANCE_TIME`).
 3. **Offline check.** Run `strucpp main.st -o build/main.cpp` and `strucpp main.st --test tests.st`. Errors go back to the model verbatim; up to 3 rounds.

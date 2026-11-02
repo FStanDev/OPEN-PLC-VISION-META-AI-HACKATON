@@ -27,6 +27,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from agent.acceptance import (
+    TESTS_APPROVED_FILE,
+    TestsApproveFn,
+    auto_approve_tests,
+    check_tests,
+    draft_acceptance_tests,
+    fake_llm_for_brief,
+    prompt_for_tests_approval,
+    wait_for_tests_approval,
+)
 from agent.codegen import (
     MAX_REPAIR_ROUNDS,
     ProgramFiles,
@@ -47,7 +57,14 @@ from agent.llm_backend import LlmBackend, MetaLlmBackend, ScriptedLlmBackend
 from agent.measure import Calibration
 from agent.packager import PackagerError
 from agent.plc_client import FakePlcClient, PlcClient, PlcError, RestPlcClient
-from agent.spec import Expectation, TaskSpec, check_against_io_map, load_task_spec
+from agent.spec import (
+    Expectation,
+    TaskBrief,
+    TaskSpec,
+    check_against_io_map,
+    check_brief_against_io_map,
+    load_task_file,
+)
 from agent.stimulus import FakeStimulus, HttpStimulus, Stimulus
 from agent.strucpp import StrucppNotFoundError
 from agent.tag_reader import FakeTagReader, ModbusTagReader, TagReader, TagValue
@@ -758,8 +775,13 @@ def run_loop(
     modbus_host: str = "0.0.0.0",
     modbus_port: int = 5020,
     calibration: Calibration | None = None,
+    acceptance: dict[str, object] | None = None,
 ) -> RunReport:
-    """Run SPEC steps 1-10 with at most ``max_logic_fixes`` physical repairs."""
+    """Run SPEC steps 1-10 with at most ``max_logic_fixes`` physical repairs.
+
+    ``acceptance`` is the step-0 record from :func:`draft_spec` when the
+    tests were drafted by the model; its tokens count towards the run.
+    """
     clock: NowMsFn = now_ms if now_ms is not None else _default_now_ms
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -774,6 +796,9 @@ def run_loop(
         passed=False,
         overall_verdict="codegen_failed",
     )
+    draft_tokens = _acceptance_tokens(acceptance)
+    report.input_tokens += draft_tokens[0]
+    report.output_tokens += draft_tokens[1]
 
     def _deploy(files: ProgramFiles) -> bytes:
         if deploy_fn is not None:
@@ -802,6 +827,8 @@ def run_loop(
     report.input_tokens += codegen.input_tokens
     report.output_tokens += codegen.output_tokens
     report.codegen = codegen.to_dict()
+    if acceptance is not None:
+        report.codegen["acceptance"] = acceptance
     files = codegen.files
     diagram = codegen.diagram
     write_code_files(run_dir, files, diagram)
@@ -937,6 +964,99 @@ def run_loop(
     return report
 
 
+def _acceptance_tokens(acceptance: dict[str, object] | None) -> tuple[int, int]:
+    draft = acceptance.get("draft") if acceptance else None
+    if not isinstance(draft, dict):
+        return 0, 0
+    return int(draft.get("input_tokens", 0) or 0), int(draft.get("output_tokens", 0) or 0)
+
+
+def draft_spec(
+    brief: TaskBrief,
+    io_map: IoMap,
+    llm: LlmBackend,
+    *,
+    run_dir: Path,
+    approve_tests: TestsApproveFn,
+    mode: str,
+) -> tuple[TaskSpec | None, dict[str, object]]:
+    """Step 0: draft acceptance tests for ``brief``, then a human approves them.
+
+    Returns the full spec (``None`` when not approved or invalid, in which
+    case ``report.json`` is already written) plus the record that goes into
+    the run report under ``codegen.acceptance``.
+    """
+    run_dir = Path(run_dir)
+    write_status(run_dir, "drafting_tests")
+    draft = draft_acceptance_tests(brief, io_map, llm, workdir=run_dir / "acceptance")
+    write_status(run_dir, "awaiting_tests_approval")
+    approved_yaml = approve_tests(draft)
+    info: dict[str, object] = {"draft": draft.to_dict(), "approved": approved_yaml is not None}
+    record_path = run_dir / TESTS_APPROVED_FILE
+    if approved_yaml is not None and record_path.is_file():
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            info["approval"] = {k: record.get(k) for k in ("at", "by")}
+        except (OSError, ValueError, AttributeError):
+            pass
+    if approved_yaml is None:
+        _finish_without_tests(run_dir, brief, mode, "tests_not_approved", info)
+        return None, info
+    info["edited"] = approved_yaml.strip() != draft.tests_yaml.strip()
+    check = check_tests(brief, approved_yaml, io_map)
+    if check.spec is None:
+        info["errors"] = list(check.errors)
+        _finish_without_tests(run_dir, brief, mode, "tests_invalid", info)
+        return None, info
+    info["warnings"] = list(check.warnings)
+    import yaml
+
+    try:
+        (run_dir / "acceptance").mkdir(parents=True, exist_ok=True)
+        (run_dir / "acceptance" / "approved_tests.yaml").write_text(approved_yaml, "utf-8")
+        (run_dir / "spec.yaml").write_text(
+            yaml.safe_dump(check.spec.model_dump(), sort_keys=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+    return check.spec, info
+
+
+def _finish_without_tests(
+    run_dir: Path, brief: TaskBrief, mode: str, verdict: str, info: dict[str, object]
+) -> None:
+    """Close a run that stopped at step 0: report.json, summary, done marker."""
+    tokens = _acceptance_tokens(info)
+    errors = info.get("errors")
+    summary = f"task {brief.task_id}: {verdict} (acceptance tests drafted, no code generated)\n"
+    if isinstance(errors, list) and errors:
+        summary += "".join(f"- {e}\n" for e in errors)
+    report = RunReport(
+        task_id=brief.task_id,
+        run_id=run_dir.name,
+        mode=mode,
+        approved=False,
+        deployed=False,
+        passed=False,
+        overall_verdict=verdict,
+        codegen={"acceptance": info},
+        input_tokens=tokens[0],
+        output_tokens=tokens[1],
+        summary=summary,
+    )
+    import yaml
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "spec.yaml").write_text(
+        yaml.safe_dump(brief.model_dump(), sort_keys=False), encoding="utf-8"
+    )
+    (run_dir / "report.json").write_text(
+        json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    (run_dir / "summary.txt").write_text(summary, encoding="utf-8")
+    write_status(run_dir, "done", verdict=verdict)
+
+
 def _write_run_files(
     run_dir: Path,
     spec: TaskSpec,
@@ -1026,16 +1146,41 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    spec = load_task_spec(args.spec)
+    task = load_task_file(args.spec)
     io_map = load_io_map(args.io_map)
-    check_against_io_map(spec, io_map)
+    if isinstance(task, TaskSpec):
+        check_against_io_map(task, io_map)
+    else:
+        check_brief_against_io_map(task, io_map)
     if args.out:
         run_dir = Path(args.out)
     else:
         stamp = datetime.now(UTC).strftime(RUN_ID_FORMAT)
-        run_dir = Path(args.runs_dir) / f"{stamp}-{spec.task_id}"
+        run_dir = Path(args.runs_dir) / f"{stamp}-{task.task_id}"
+    acceptance: dict[str, object] | None = None
 
     if args.fake:
+        if isinstance(task, TaskSpec):
+            spec = task
+        else:
+            # A brief: draft tests first (deterministic fake draft, no credits).
+            gate: TestsApproveFn = (
+                wait_for_tests_approval(run_dir, args.wait_approval)
+                if args.wait_approval > 0
+                else auto_approve_tests
+            )
+            drafted, acceptance = draft_spec(
+                task,
+                io_map,
+                fake_llm_for_brief(task, io_map),
+                run_dir=run_dir,
+                approve_tests=gate,
+                mode="fake",
+            )
+            if drafted is None:
+                print(f"{task.task_id}: acceptance tests not approved -> {run_dir}")
+                return 1
+            spec = drafted
         llm: LlmBackend = _fake_llm_for_loop()
         plc: PlcClient = FakePlcClient()
         fake_tags = _fake_tags_for_spec(spec)
@@ -1083,6 +1228,7 @@ def main(argv: list[str] | None = None) -> int:
             deploy_fn=_fake_deploy,
             prepare_test_fn=lambda index, test: _prepare_fake_test(fake_tags, index, test),
             calibration=calibration,
+            acceptance=acceptance,
         )
         print(f"{spec.task_id}: {report.overall_verdict} -> {run_dir}")
         print(report.summary)
@@ -1149,6 +1295,21 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     try:
+        if isinstance(task, TaskSpec):
+            spec = task
+        else:
+            tests_gate: TestsApproveFn = (
+                wait_for_tests_approval(run_dir, args.wait_approval)
+                if args.wait_approval > 0
+                else (auto_approve_tests if args.approve else prompt_for_tests_approval)
+            )
+            drafted, acceptance = draft_spec(
+                task, io_map, real_llm, run_dir=run_dir, approve_tests=tests_gate, mode="real"
+            )
+            if drafted is None:
+                print(f"{task.task_id}: acceptance tests not approved -> {run_dir}")
+                return 1
+            spec = drafted
         report = run_loop(
             spec,
             io_map,
@@ -1175,6 +1336,7 @@ def main(argv: list[str] | None = None) -> int:
             plc_password=openplc_password,
             modbus_port=modbus_port,
             calibration=calibration,
+            acceptance=acceptance,
         )
     finally:
         real_llm.close()

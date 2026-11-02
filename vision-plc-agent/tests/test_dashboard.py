@@ -602,3 +602,90 @@ def test_plc_control_rejects_bad_input_and_reports_errors(tmp_path: Path) -> Non
     state.plc_factory = broken
     status, payload = state.plc_control("status", "")
     assert status == 502 and "no route" in str(payload["error"])
+
+
+def _brief_task(task_id: str = "brief_task") -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "description": "When start is pressed, latch the green lamp on. Stop turns "
+        "everything off leaving red lamp on for 3 seconds.",
+        "signals": ["start_btn", "stop_btn", "lamp_red", "lamp_green"],
+        "tests": "  \n",
+    }
+
+
+def _wait_for(base: str, run_id: str, key: str, timeout_s: float = 60.0) -> dict:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            detail = _get_json(base, f"/api/runs/{run_id}")
+        except urllib.error.HTTPError:
+            time.sleep(0.3)
+            continue
+        assert isinstance(detail, dict)
+        if detail.get(key):
+            return detail
+        time.sleep(0.3)
+    raise AssertionError(f"run {run_id}: {key} not set within {timeout_s}s")
+
+
+def test_create_task_without_tests_writes_brief(task_server: tuple) -> None:
+    base, specs, _ = task_server
+    status, payload = _post_json(base, "/api/tasks", _brief_task())
+    assert status == 200 and isinstance(payload, dict) and payload["draft_tests"] is True
+    text = (specs / "brief_task.yaml").read_text(encoding="utf-8")
+    assert "tests" not in text and "lamp_green" in text
+    bad = _brief_task()
+    bad["signals"] = ["lamp_blue"]
+    assert _post_json(base, "/api/tasks", bad)[0] == 400
+
+
+def test_brief_run_drafts_tests_then_code_then_deploys(task_server: tuple) -> None:
+    base, specs, _ = task_server
+    assert _post_json(base, "/api/tasks", _brief_task())[0] == 200
+    status, _ = _post_json(
+        base, "/api/runs/start", {"task_id": "brief_task", "mode": "fake", "run_id": "draft1"}
+    )
+    assert status == 200
+    detail = _wait_for(base, "draft1", "pending_tests")
+    assert detail["verdict"] == "awaiting_tests_approval"
+    draft = detail["tests_draft"]
+    assert draft["brief"]["task_id"] == "brief_task" and "lamp_green" in draft["tests_yaml"]
+    pending = _get_json(base, "/api/pending")
+    assert isinstance(pending, dict) and pending["pending"][0]["pending_tests"] is True
+    # Code approval is not open yet; a broken edit is refused with the validator's words.
+    assert _post_json(base, "/api/runs/draft1/approve", {})[0] == 409
+    status, payload = _post_json(
+        base, "/api/runs/draft1/approve-tests", {"tests_yaml": "- {name: t, expect: []}"}
+    )
+    assert status == 400 and "expect" in str(payload)
+    status, payload = _post_json(
+        base, "/api/runs/draft1/approve-tests", {"tests_yaml": draft["tests_yaml"], "by": "me"}
+    )
+    assert status == 200 and isinstance(payload, dict) and payload["approved"] is True
+    assert _post_json(base, "/api/runs/draft1/approve-tests", {"tests_yaml": "x"})[0] == 409
+    assert "tests:" in (specs / "brief_task.yaml").read_text(encoding="utf-8")
+    # Then the usual code gate.
+    _wait_for(base, "draft1", "pending_approval")
+    assert _post_json(base, "/api/runs/draft1/approve", {"by": "me"})[0] == 200
+    report = _wait_for_report(base, "draft1")["report"]
+    assert report["verdict"] == "pass"
+    assert report["codegen"]["acceptance"]["approval"]["by"] == "me"
+
+
+def test_brief_run_reject_tests_ends_run(task_server: tuple) -> None:
+    base, _, _ = task_server
+    assert _post_json(base, "/api/tasks", _brief_task("rej_task"))[0] == 200
+    assert (
+        _post_json(
+            base, "/api/runs/start", {"task_id": "rej_task", "mode": "fake", "run_id": "rej1"}
+        )[0]
+        == 200
+    )
+    _wait_for(base, "rej1", "pending_tests")
+    assert _post_json(base, "/api/runs/rej1/reject-tests", {})[0] == 200
+    report = _wait_for_report(base, "rej1", timeout_s=30)["report"]
+    assert report["verdict"] == "tests_not_approved" and report["deployed"] is False
+    assert _post_json(base, "/api/runs/rej1/reject-tests", {})[0] == 409

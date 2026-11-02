@@ -1,0 +1,29 @@
+task_id: demo_task_5
+description: When start is pressed, latch the red lamp on. Stop turns everything off.
+signals:
+- start_btn
+- stop_btn
+- lamp_red
+- arm_angle
+tests:
+- name: start_latches_lamp
+  stimulus:
+  - at_ms: 0
+    press: start_btn
+    release: null
+  - at_ms: 200
+    press: null
+    release: start_btn
+  expect:
+  - signal: lamp_red
+    value: true
+    within_ms: 500
+    at_ms: null
+    tolerance: null
+    tolerance_ms: null
+  - signal: arm_angle
+    value: 90
+    within_ms: 1500
+    at_ms: null
+    tolerance: 10.0
+    tolerance_ms: null

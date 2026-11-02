@@ -32,6 +32,12 @@ from urllib.parse import parse_qs, urlparse
 
 import yaml
 
+from agent.acceptance import (
+    PENDING_TESTS_FILE,
+    TESTS_APPROVED_FILE,
+    TESTS_REJECTED_FILE,
+    check_tests,
+)
 from agent.dotenv import load_dotenv
 from agent.io_map import load_io_map
 from agent.loop import (
@@ -42,7 +48,13 @@ from agent.loop import (
     with_pi_host,
 )
 from agent.plc_client import PlcClient, PlcError, RestPlcClient
-from agent.spec import TaskSpec, check_against_io_map
+from agent.spec import (
+    TaskBrief,
+    TaskSpec,
+    check_against_io_map,
+    check_brief_against_io_map,
+    load_task_file,
+)
 from agent.tag_writer import ModbusTagWriter, TagWriter
 
 INDEX_PATH = Path(__file__).resolve().parent / "index.html"
@@ -107,10 +119,33 @@ def read_json(path: Path) -> dict[str, object] | None:
     return data if isinstance(data, dict) else None
 
 
+def tests_pending(run_dir: Path) -> bool:
+    """Drafted acceptance tests wait for the human (step 0)."""
+    return (
+        (run_dir / PENDING_TESTS_FILE).is_file()
+        and not (run_dir / TESTS_APPROVED_FILE).is_file()
+        and not (run_dir / TESTS_REJECTED_FILE).is_file()
+        and not (run_dir / "report.json").is_file()
+    )
+
+
+def spec_is_brief(path: Path) -> bool:
+    """A spec file without tests: the run drafts them first.
+
+    Light check only; full validation (and its error report) stays in the loop.
+    """
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return False
+    return isinstance(data, dict) and "description" in data and not data.get("tests")
+
+
 def run_summary(run_dir: Path, live: bool = False) -> dict[str, object]:
     report = read_json(run_dir / "report.json")
     summary: dict[str, object] = {
         "run_id": run_dir.name,
+        "pending_tests": tests_pending(run_dir),
         "pending_approval": (run_dir / "pending_approval.json").is_file()
         and not (run_dir / "approved.json").is_file(),
         "approved": (run_dir / "approved.json").is_file(),
@@ -121,9 +156,13 @@ def run_summary(run_dir: Path, live: bool = False) -> dict[str, object]:
     if report is None:
         summary.update({"task_id": None, "verdict": None, "passed": False, "tests": []})
         pending = read_json(run_dir / "pending_approval.json")
+        pending_tests = read_json(run_dir / PENDING_TESTS_FILE)
         if isinstance(pending, dict):
             summary["task_id"] = pending.get("task_id")
             summary["verdict"] = "awaiting_approval"
+        elif isinstance(pending_tests, dict) and summary["pending_tests"]:
+            summary["task_id"] = pending_tests.get("task_id")
+            summary["verdict"] = "awaiting_tests_approval"
         elif status:
             summary["verdict"] = status.get("stage")
         return summary
@@ -154,6 +193,8 @@ def run_detail(run_dir: Path, live: bool = False) -> dict[str, object]:
     detail["report"] = read_json(run_dir / "report.json")
     detail["pending"] = read_json(run_dir / "pending_approval.json")
     detail["approval"] = read_json(run_dir / "approved.json")
+    detail["tests_draft"] = read_json(run_dir / PENDING_TESTS_FILE)
+    detail["tests_approval"] = read_json(run_dir / TESTS_APPROVED_FILE)
     detail["spec_yaml"] = read_text_limited(run_dir / "spec.yaml")
     detail["diagram"] = read_text_limited(run_dir / "diagram.mmd")
     detail["summary_txt"] = read_text_limited(run_dir / "summary.txt")
@@ -306,17 +347,18 @@ class DashboardState:
         if not isinstance(signals, list) or not signals:
             return 400, {"error": "signals must be a non-empty list"}
         raw_tests = body.get("tests")
+        draft_tests = raw_tests is None or (isinstance(raw_tests, str) and not raw_tests.strip())
+        spec: TaskSpec | TaskBrief
         try:
-            tests = yaml.safe_load(raw_tests) if isinstance(raw_tests, str) else raw_tests
-            spec = TaskSpec.model_validate(
-                {
-                    "task_id": task_id,
-                    "description": description.strip(),
-                    "signals": signals,
-                    "tests": tests,
-                }
-            )
-            check_against_io_map(spec, load_io_map(self.io_map_path))
+            fields = {"task_id": task_id, "description": description.strip(), "signals": signals}
+            if draft_tests:
+                # No tests given: write a brief; the run drafts tests for approval.
+                spec = TaskBrief.model_validate(fields)
+                check_brief_against_io_map(spec, load_io_map(self.io_map_path))
+            else:
+                tests = yaml.safe_load(raw_tests) if isinstance(raw_tests, str) else raw_tests
+                spec = TaskSpec.model_validate({**fields, "tests": tests})
+                check_against_io_map(spec, load_io_map(self.io_map_path))
         except (ValueError, yaml.YAMLError) as exc:
             return 400, {"error": _short_error(exc)}
         try:
@@ -327,7 +369,12 @@ class DashboardState:
             path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False), encoding="utf-8")
         except OSError as exc:
             return 500, {"error": _short_error(exc)}
-        return 200, {"ok": True, "task_id": task_id, "spec": str(path)}
+        return 200, {
+            "ok": True,
+            "task_id": task_id,
+            "spec": str(path),
+            "draft_tests": draft_tests,
+        }
 
     def start_run(self, body: object) -> tuple[int, dict[str, object]]:
         if self.specs_dir is None:
@@ -340,6 +387,7 @@ class DashboardState:
         spec_path = self.specs_dir / f"{task_id}.yaml"
         if not spec_path.is_file():
             return 404, {"error": f"no spec for {task_id!r}"}
+        draft_tests = spec_is_brief(spec_path)
         mode = body.get("mode", "fake")
         if mode not in ("fake", "real"):
             return 400, {"error": "mode must be 'fake' or 'real'"}
@@ -375,7 +423,7 @@ class DashboardState:
         }
         thread = threading.Thread(
             target=self._run_job,
-            args=(job, spec_path, run_dir, mode, float(wait_s), pi_host),
+            args=(job, spec_path, run_dir, mode, float(wait_s), pi_host, draft_tests),
             daemon=True,
         )
         job["thread"] = thread
@@ -399,6 +447,7 @@ class DashboardState:
         mode: str,
         wait_s: float,
         pi_host: str = "",
+        draft_tests: bool = False,
     ) -> None:
         from agent.loop import main as run_loop_main
         from agent.loop import write_status
@@ -406,6 +455,10 @@ class DashboardState:
         argv = [str(spec_path), "--out", str(run_dir)]
         if mode == "fake":
             argv.append("--fake")
+            if draft_tests:
+                # The human approves the drafted tests (and then the code) here,
+                # so the whole flow can be rehearsed without the Pi.
+                argv += ["--wait-approval", str(wait_s)]
         else:
             argv += ["--wait-approval", str(wait_s)]
             if pi_host:
@@ -470,6 +523,64 @@ class DashboardState:
             }
             approved_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
             return 200, {"approved": True, "record": record}
+
+    def approve_tests(self, run_dir: Path, body: object) -> tuple[int, dict[str, object]]:
+        """Accept the drafted (maybe edited) tests; validate before the loop sees them."""
+        if not isinstance(body, dict):
+            return 400, {"error": "want a JSON object"}
+        tests_yaml = body.get("tests_yaml")
+        if not isinstance(tests_yaml, str) or not tests_yaml.strip():
+            return 400, {"error": "tests_yaml must be a non-empty string"}
+        by = body.get("by") if isinstance(body.get("by"), str) else ""
+        with self._lock:
+            if not tests_pending(run_dir):
+                return 409, {"error": "run is not awaiting test approval"}
+            pending = read_json(run_dir / PENDING_TESTS_FILE) or {}
+            try:
+                brief = TaskBrief.model_validate(pending.get("brief"))
+                check = check_tests(brief, tests_yaml, load_io_map(self.io_map_path))
+            except (OSError, ValueError) as exc:
+                return 500, {"error": _short_error(exc)}
+            if check.spec is None:
+                return 400, {"error": "; ".join(check.errors), "errors": list(check.errors)}
+            record = {
+                "approved": True,
+                "at": datetime.now(UTC).isoformat(),
+                "by": (by or "dashboard")[:64],
+                "tests_yaml": tests_yaml,
+                "warnings": list(check.warnings),
+            }
+            self._save_drafted_spec(check.spec)
+            (run_dir / TESTS_APPROVED_FILE).write_text(
+                json.dumps(record, indent=2) + "\n", encoding="utf-8"
+            )
+        return 200, {"approved": True, "warnings": list(check.warnings)}
+
+    def _save_drafted_spec(self, spec: TaskSpec) -> None:
+        """Fill the brief in specs/ with the approved tests so the task re-runs as is."""
+        if self.specs_dir is None:
+            return
+        path = self.specs_dir / f"{spec.task_id}.yaml"
+        try:
+            if path.is_file() and isinstance(load_task_file(path), TaskSpec):
+                return  # never overwrite a spec that already has tests
+            path.write_text(yaml.safe_dump(spec.model_dump(), sort_keys=False), encoding="utf-8")
+        except (OSError, ValueError, yaml.YAMLError):
+            pass
+
+    def reject_tests(self, run_dir: Path, by: str) -> tuple[int, dict[str, object]]:
+        with self._lock:
+            if not tests_pending(run_dir):
+                return 409, {"error": "run is not awaiting test approval"}
+            record = {
+                "rejected": True,
+                "at": datetime.now(UTC).isoformat(),
+                "by": by or "dashboard",
+            }
+            (run_dir / TESTS_REJECTED_FILE).write_text(
+                json.dumps(record, indent=2) + "\n", encoding="utf-8"
+            )
+        return 200, {"rejected": True}
 
     def newest_frame(self) -> bytes | None:
         newest: Path | None = None
@@ -561,7 +672,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"runs": self.state.list_runs()})
             return
         if path == "/api/pending":
-            pending = [r for r in self.state.list_runs() if r.get("pending_approval")]
+            pending = [
+                r
+                for r in self.state.list_runs()
+                if r.get("pending_approval") or r.get("pending_tests")
+            ]
             self._send_json(200, {"pending": pending})
             return
         if path == "/api/plc":
@@ -669,7 +784,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             status, payload = self.state.start_run(body)
             self._send_json(status, payload)
             return
-        match = re.fullmatch(r"/api/runs/([^/]+)/approve", parsed.path)
+        match = re.fullmatch(r"/api/runs/([^/]+)/(approve|approve-tests|reject-tests)", parsed.path)
         if not match:
             self._send_json(404, {"error": "not found"})
             return
@@ -681,7 +796,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         by = ""
         if isinstance(body, dict) and isinstance(body.get("by"), str):
             by = body["by"][:64]
-        status, payload = self.state.approve(run_dir, by)
+        action = match.group(2)
+        if action == "approve-tests":
+            status, payload = self.state.approve_tests(run_dir, body)
+        elif action == "reject-tests":
+            status, payload = self.state.reject_tests(run_dir, by)
+        else:
+            status, payload = self.state.approve(run_dir, by)
         self._send_json(status, payload)
 
 

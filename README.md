@@ -41,7 +41,7 @@ Meta models through the Meta Model API (OpenAI-compatible):
 ## Architecture
 
 ```text
-Laptop                                  Raspberry Pi (over Tailscale)
+Laptop                                  Raspberry Pi (local network)
 agent/      Python agent loop           OpenPLC Runtime v4 (REST 8443, Modbus TCP)
 dashboard/  web UI                      pi/gpio_plugin       I/O image -> GPIO (+ PCA9685)
 tests/      pytest, fakes only          pi/stimulus_service  presses buttons via GPIO

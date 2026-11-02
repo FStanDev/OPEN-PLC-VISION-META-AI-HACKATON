@@ -18,7 +18,7 @@ import yaml
 from agent.dotenv import load_dotenv as _load_dotenv
 from agent.io_map import IoMap, load_io_map
 from agent.llm_backend import LlmBackend, LlmReply, MetaLlmBackend, ScriptedLlmBackend
-from agent.spec import TaskSpec, check_against_io_map, load_task_spec
+from agent.spec import TaskBrief, TaskSpec, check_against_io_map, load_task_spec
 from agent.strucpp import StrucppResult, compile_st, run_st_tests
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -100,7 +100,7 @@ def render_spec_yaml(spec: TaskSpec) -> str:
     return yaml.safe_dump(spec.model_dump(), sort_keys=False).strip() + "\n"
 
 
-def render_io_table(spec: TaskSpec, io_map: IoMap) -> str:
+def render_io_table(spec: TaskBrief, io_map: IoMap) -> str:
     """One line per spec signal: name, type, direction, IEC, Modbus, safe value."""
     lines = []
     for name in spec.signals:
@@ -113,7 +113,7 @@ def render_io_table(spec: TaskSpec, io_map: IoMap) -> str:
     return "\n".join(lines)
 
 
-def render_safe_state(spec: TaskSpec, io_map: IoMap) -> str:
+def render_safe_state(spec: TaskBrief, io_map: IoMap) -> str:
     return ", ".join(f"{n}={io_map.safe_state.get(n, '?')}" for n in spec.signals)
 
 
