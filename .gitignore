@@ -44,3 +44,6 @@ reference/*.zip
 *.swp
 .DS_Store
 Thumbs.db
+test_i2c.py
+test_servo.py
+getToken.sh
