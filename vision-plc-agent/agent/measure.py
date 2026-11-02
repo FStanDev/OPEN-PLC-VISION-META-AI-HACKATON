@@ -18,6 +18,7 @@ import numpy as np
 
 GRAY_ZONE_FRACTION = 0.15  # "too close to the threshold to call" band
 MIN_ARM_AREA_FRACTION = 0.01  # smallest believable arm blob, vs the crop area
+BRIGHTNESS_PERCENTILE = 95  # LED hot spot must cover >= 5% of its box
 
 
 class MeasureError(RuntimeError):
@@ -154,10 +155,16 @@ def crop_for_mask(img: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarra
 
 
 def brightness(img: np.ndarray, bbox: tuple[int, int, int, int]) -> float:
-    """Mean grayscale inside ``bbox`` as 0..1."""
+    """High-percentile grayscale inside ``bbox`` as 0..1.
+
+    A lit LED is a small hot spot in a box that is mostly legs, breadboard
+    and background; a box mean dilutes it (bench: ~10% of a manual box).
+    The ``BRIGHTNESS_PERCENTILE`` value tracks the hot spot while ignoring a
+    few specular pixels.
+    """
     crop = crop_for_mask(img, bbox)
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    return float(np.mean(gray)) / 255.0
+    return float(np.percentile(gray, BRIGHTNESS_PERCENTILE)) / 255.0
 
 
 def classify_brightness(value: float, baseline: BrightnessBaseline | None) -> bool | None:

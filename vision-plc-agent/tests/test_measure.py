@@ -44,6 +44,16 @@ def test_brightness_solid_and_clamped() -> None:
         brightness(img, (50, 50, 60, 60))  # fully outside
 
 
+def test_brightness_tracks_small_hot_spot_not_box_mean() -> None:
+    """A lit LED covering ~10% of a loose box must still read near its own level."""
+    raw = np.full((60, 60, 3), 40, dtype=np.uint8)
+    lit = raw.copy()
+    lit[25:44, 25:44] = 255  # ~10% of the box
+    off = brightness(decode_frame(_encode(raw)), (0, 0, 60, 60))
+    on = brightness(decode_frame(_encode(lit)), (0, 0, 60, 60))
+    assert on - off > 0.5  # a box mean would move only ~0.08
+
+
 def test_classify_lit_unlit_and_gray_zone() -> None:
     base = BrightnessBaseline(off=0.1, on=0.9)
     assert classify_brightness(0.8, base) is True
