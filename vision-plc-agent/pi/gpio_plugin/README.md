@@ -2,7 +2,7 @@
 
 OpenPLC Runtime v4 Python plugin: copies physical button levels into `%IX`
 and `%QX`/`%QW` image values out to the lamps (GPIO17/27/22) and the servo
-(PCA9685 channel 0). Driven entirely by `io_map.yaml` — no pins in code.
+(PCA9685 channel 1). Driven entirely by `io_map.yaml` — no pins in code.
 
 Design notes:
 

@@ -46,7 +46,7 @@ One developer, limited evening hours: prefer the simplest thing that works.
 | lamp_red | %QX0.0 | coil 0 | GPIO17 |
 | lamp_green | %QX0.1 | coil 1 | GPIO27 |
 | lamp_yellow | %QX0.2 | coil 2 | GPIO22 |
-| arm_angle | %QW0 (0–180 deg) | holding register 0 | PCA9685 ch 0 (optional) |
+| arm_angle | %QW0 (0–180 deg) | holding register 0 | PCA9685 ch 1 (optional) |
 | stim_start | test harness only | — | GPIO26 (1 kΩ to GPIO5) |
 | stim_stop | test harness only | — | GPIO13 (1 kΩ to GPIO6) |
 

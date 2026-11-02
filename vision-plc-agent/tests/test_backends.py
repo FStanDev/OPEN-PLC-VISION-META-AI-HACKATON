@@ -60,6 +60,13 @@ def test_pca9685_configures_50hz() -> None:
     assert bus.writes[-1] == (0x40, 0x00, 0x80)  # restart
 
 
+def test_pca9685_wakes_chip_stuck_asleep() -> None:
+    bus = FakeBus()
+    bus.regs[0x00] = 0x91  # SLEEP latched by an earlier session, as seen live
+    _pwm(bus)  # must not raise
+    assert bus.regs[0x00] & 0x10 == 0
+
+
 def test_pca9685_angle_to_pulse() -> None:
     bus = FakeBus()
     pwm = _pwm(bus)

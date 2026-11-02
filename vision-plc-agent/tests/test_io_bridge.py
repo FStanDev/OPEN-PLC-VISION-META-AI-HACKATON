@@ -33,7 +33,11 @@ def test_parse_iec_invalid(text: str) -> None:
 
 
 class FakeBuffers:
-    """Duck-typed SafeBufferAccess over dicts, with error injection."""
+    """Duck-typed SafeBufferAccess over dicts, with error injection.
+
+    Success status is ``"Success"`` (not ``""``): that is the runtime's real
+    ``(value, status)`` convention (see ``shared/buffer_accessor.py``).
+    """
 
     def __init__(self) -> None:
         self.bool_inputs: dict[tuple[int, int], bool] = {}
@@ -47,19 +51,19 @@ class FakeBuffers:
         if self.fail:
             return False, self.fail
         self.bool_inputs[(buffer_idx, bit_idx)] = value
-        return True, ""
+        return True, "Success"
 
     def read_bool_output(
         self, buffer_idx: int, bit_idx: int, thread_safe: bool = True
     ) -> tuple[bool, str]:
         if self.fail:
             return False, self.fail
-        return self.bool_outputs.get((buffer_idx, bit_idx), False), ""
+        return self.bool_outputs.get((buffer_idx, bit_idx), False), "Success"
 
     def read_int_output(self, buffer_idx: int, thread_safe: bool = True) -> tuple[int, str]:
         if self.fail:
             return 0, self.fail
-        return self.int_outputs.get(buffer_idx, 0), ""
+        return self.int_outputs.get(buffer_idx, 0), "Success"
 
 
 def _bridge(gpio: FakeGpio, pwm: FakePwm | None = None) -> IoBridge:
@@ -94,13 +98,13 @@ def test_sync_clamps_servo_and_treats_int_as_signed() -> None:
     buffers = FakeBuffers()
     buffers.int_outputs[0] = 90
     bridge.sync(buffers)
-    assert pwm.angles[0] == 90
+    assert pwm.angles[1] == 90  # io_map arm_angle channel
     buffers.int_outputs[0] = 1000
     bridge.sync(buffers)
-    assert pwm.angles[0] == 180
+    assert pwm.angles[1] == 180
     buffers.int_outputs[0] = 0xFFFF  # ST INT -1 on the wire
     bridge.sync(buffers)
-    assert pwm.angles[0] == 0
+    assert pwm.angles[1] == 0
 
 
 def test_sync_propagates_buffer_errors() -> None:
@@ -123,7 +127,7 @@ def test_safe_state_turns_everything_off() -> None:
     assert gpio.levels[17] is False
     assert gpio.levels[27] is False
     assert gpio.levels[22] is False
-    assert pwm.angles[0] == 0
+    assert pwm.angles[1] == 0
 
 
 def test_optional_servo_skipped_without_pwm() -> None:

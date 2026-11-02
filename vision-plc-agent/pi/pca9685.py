@@ -98,6 +98,11 @@ class Pca9685(PwmBackend):
         mode1 = self._bus.read_byte_data(self._address, _MODE1)
         self._bus.write_byte_data(self._address, _MODE1, (mode1 & ~_MODE1_RESTART) | _MODE1_SLEEP)
         self._bus.write_byte_data(self._address, _PRESCALE, prescale)
-        self._bus.write_byte_data(self._address, _MODE1, mode1 & ~_MODE1_SLEEP)
+        # Clear SLEEP explicitly (never reuse the entry snapshot: a SLEEP bit
+        # latched by an earlier session would otherwise be resurrected here).
+        awake = mode1 & ~_MODE1_SLEEP
+        self._bus.write_byte_data(self._address, _MODE1, awake)
         sleep(0.005)
-        self._bus.write_byte_data(self._address, _MODE1, mode1 | _MODE1_RESTART)
+        self._bus.write_byte_data(self._address, _MODE1, awake | _MODE1_RESTART)
+        if self._bus.read_byte_data(self._address, _MODE1) & _MODE1_SLEEP:
+            raise RuntimeError("PCA9685 would not leave SLEEP mode; outputs stay dark")

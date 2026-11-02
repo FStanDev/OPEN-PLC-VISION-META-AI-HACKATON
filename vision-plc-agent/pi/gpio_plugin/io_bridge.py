@@ -51,7 +51,11 @@ def parse_iec(iec: str) -> IecAddress:
 
 
 class BufferAccess(Protocol):
-    """The SafeBufferAccess subset the bridge uses (all return ``(value, err)``)."""
+    """The SafeBufferAccess subset the bridge uses.
+
+    All calls return ``(value, status)`` with ``status == "Success"`` on
+    success (the runtime's convention, see ``shared/buffer_accessor.py``).
+    """
 
     def write_bool_input(
         self, buffer_idx: int, bit_idx: int, value: bool, thread_safe: bool = True
@@ -139,20 +143,20 @@ class IoBridge:
                 assert binding.bcm is not None
                 level = self._gpio.read(binding.bcm)
                 logical = (not level) if binding.active_low else level
-                ok, err = buffers.write_bool_input(binding.byte, binding.bit, logical)
+                ok, status = buffers.write_bool_input(binding.byte, binding.bit, logical)
                 if not ok:
-                    raise BufferError(f"write {binding.name}: {err}")
+                    raise BufferError(f"write {binding.name}: {status}")
             elif binding.kind == "output_bool":
                 assert binding.bcm is not None
-                value, err = buffers.read_bool_output(binding.byte, binding.bit)
-                if err:
-                    raise BufferError(f"read {binding.name}: {err}")
+                value, status = buffers.read_bool_output(binding.byte, binding.bit)
+                if status != "Success":
+                    raise BufferError(f"read {binding.name}: {status}")
                 self._gpio.write(binding.bcm, value)
             else:
                 assert binding.pwm_channel is not None and self._pwm is not None
-                raw, err = buffers.read_int_output(binding.byte)
-                if err:
-                    raise BufferError(f"read {binding.name}: {err}")
+                raw, status = buffers.read_int_output(binding.byte)
+                if status != "Success":
+                    raise BufferError(f"read {binding.name}: {status}")
                 signed = raw - 0x10000 if raw >= 0x8000 else raw  # ST INT is signed
                 lo, hi = binding.range
                 self._pwm.set_angle(binding.pwm_channel, max(lo, min(hi, signed)))
