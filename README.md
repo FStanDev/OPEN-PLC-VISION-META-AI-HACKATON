@@ -1,122 +1,129 @@
-# vision-plc-agent
+# OPEN VISION-PLC-AGENT
 
-**An agent that writes PLC logic, runs the tests and uses a camera to verify the
-physical result, telling code bugs apart from wiring faults.**
+An agent that writes PLC logic, runs the tests and uses vision to verify the
+physical result — telling code bugs apart from wiring faults.
 
-Entry for the Meta Global AI Developer Hackathon (Indie developer track, theme
-"Push the Frontier"). Built by one person on a hobby bench
-rig; it never controls real industrial equipment or mains voltage.
+Meta Global AI Developer Hackathon entry ("Push the Frontier"). You describe
+the behaviour in plain English; the agent plans it, writes IEC 61131-3
+Structured Text, deploys it to an OpenPLC Runtime on a Raspberry Pi, presses
+real buttons, and checks the lamps and servo arm with a camera. When a test
+fails it tells you whether the program is wrong or the wiring is.
 
-## What it does
+> 🎬 Demo video (< 3 min): **[https://youtu.be/_patbpiZX98]**
 
-The agent commissions a PLC the way an engineer does:
+## How it works
 
-1. **Spec:** a task written as YAML (I/O, sequence, acceptance tests).
-2. **Code:** Muse Spark writes IEC 61131-3 Structured Text plus ST unit tests.
-   STruC++ compile errors and test failures are fed back automatically.
-3. **Approve:** a human approves before anything is deployed.
-4. **Deploy:** the program is packaged and uploaded to OpenPLC Runtime v4 on a
-   Raspberry Pi.
-5. **Test:** the agent presses the buttons, reads PLC tags over Modbus TCP and
-   grabs camera frames.
-6. **See:** SAM 3.1 segments the LEDs (and optional servo arm) so lamp state can be
-   measured.
-7. **Diagnose:** spec, tags and camera are compared three ways:
+1. **Describe.** Write a task file in `specs/`: plain-English description plus
+   the acceptance tests that prove it works. The engineer never writes ST.
+2. **Plan + generate.** Muse Spark draws a state diagram, writes one
+   `PROGRAM Main` plus ST unit tests; STruC++ compile/test errors feed back
+   automatically (max 3 rounds).
+3. **Approve.** The dashboard shows the diagram, the code and the diffs.
+   Nothing deploys until a human clicks approve.
+4. **Deploy + test.** The agent packages `program.zip`, uploads it over the
+   OpenPLC REST API, plays the stimulus timeline through real GPIO, polls
+   tags over Modbus TCP and grabs camera frames at every checkpoint.
+5. **See + diagnose.** SAM 3.1 segments the LEDs and the arm; brightness and
+   angle are measured against calibration. Spec vs tags vs camera decides:
 
-| Spec vs tags | Tags vs camera | Verdict | Action |
-| --- | --- | --- | --- |
-| match | match | pass | record evidence |
-| mismatch | camera agrees with tags | logic bug | fix ST, retry (max 3) |
-| match | mismatch | physical fault | stop, report address + observed state |
-| mismatch | mismatch | unclear | stop, ask the human |
-| any | low confidence | vision inconclusive | re-capture once, then report |
+| Spec vs tags | Tags vs camera          | Verdict        | Action                                |
+| ------------ | ----------------------- | -------------- | ------------------------------------- |
+| match        | match                   | pass           | record evidence                       |
+| mismatch     | camera agrees with tags | logic bug      | fix ST, retry (max 3)                 |
+| match        | mismatch                | physical fault | stop, report address + observed state |
+| mismatch     | mismatch                | unclear        | stop, ask the human                   |
 
-Example: "Logic correct, `%QX0.0` is TRUE, lamp not lit, check wiring at that output."
-
-## AI models
-
-Meta models through the Meta Model API (OpenAI-compatible):
-`muse-spark-1.3` for reasoning and ST code, SAM 3.1 for vision.
+Every run lands in `runs/<timestamp>-<task_id>/`: spec, prompts, ST, frames,
+`report.json` (with token usage) and a readable `summary.txt`.
 
 ## Architecture
 
-```text
-Laptop                                  Raspberry Pi (local network)
-agent/      Python agent loop           OpenPLC Runtime v4 (REST 8443, Modbus TCP)
-dashboard/  web UI                      pi/gpio_plugin       I/O image -> GPIO (+ PCA9685)
-tests/      pytest, fakes only          pi/stimulus_service  presses buttons via GPIO
-                                        pi/frame_service     C920 stills + MJPEG preview
+```mermaid
+flowchart LR
+    Spec["Task spec<br/>(YAML)"] --> Agent["Agent loop<br/>(laptop, Python)"]
+    Agent --> Spark["Muse Spark 1.3<br/>plan, ST, repairs"]
+    Agent --> STruC["STruC++<br/>compile + ST tests"]
+    Agent -->|approve| Dash["Dashboard<br/>code, diffs, camera, verdict"]
+    Agent -->|REST 8443| PLC["OpenPLC Runtime v4<br/>(Raspberry Pi)"]
+    PLC --> GPIO["GPIO plugin<br/>LEDs + servo"]
+    Agent -->|stimulus| Stim["Stimulus service<br/>presses buttons"]
+    Agent -->|frames| Cam["Frame service<br/>(C920)"]
+    Cam --> SAM["SAM 3.1<br/>masks"]
+    SAM --> Agent
+    PLC -->|Modbus TCP| Agent
 ```
 
-Every hardware, network and model call sits behind an interface with a fake
-(`llm_backend`, `vision_backend`, `plc_client`, `tag_reader`, `stimulus`, `frames`),
-so the whole loop runs without a Pi, an API key or credits.
+## The diagram the agent drew (demo task)
 
-The I/O contract (pins, IEC addresses, Modbus addresses) lives in
-[`vision-plc-agent/io_map.yaml`](vision-plc-agent/io_map.yaml).
+This is the actual plan Muse Spark produced for `specs/start_lamp_arm.yaml`
+— also shown in the dashboard before you approve:
 
-## Repository layout
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE: Safe - lamp_red=False, arm_angle=0
+    ACTIVE: lamp_red=True, arm_angle=90
+    IDLE --> ACTIVE: start_btn pressed
+    ACTIVE --> IDLE: stop_btn pressed
+```
 
-| Path | Contents |
-| --- | --- |
-| [`vision-plc-agent/`](vision-plc-agent/) | The project: Python package, Pi services, tests, task specs |
-| [`vision-plc-agent/docs/SPEC.md`](vision-plc-agent/docs/SPEC.md) | Full project spec (source of truth) |
-| [`vision-plc-agent/AGENTS.md`](vision-plc-agent/AGENTS.md) | Rules for coding agents working on the repo |
-| [`vision-plc-agent/THIRD_PARTY.md`](vision-plc-agent/THIRD_PARTY.md) | Every dependency and its licence |
-| `vision-plc-agent-starter/` | Original starter kit the project was bootstrapped from |
-| `AGENTS.md`, `KICKOFF_PROMPT.md`, `docs/` | Original kickoff material |
-
-Note on history: Git was re-initialised at the project root on 31 Oct 2026; the
-first commit message was later reworded to explain this.
-
-## Getting started
-
-Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
+## Try it without hardware
 
 ```bash
-cd vision-plc-agent
 uv sync
-uv run pytest                      # unit tests, fakes only, no hardware
+uv run pytest                         # fakes only: no Pi, no API, no credits
+uv run python -m dashboard.server --port 8000   # open http://127.0.0.1:8000/
+```
+
+Then click **New task** in the dashboard: describe the behaviour, tick the
+signals, paste the tests as YAML, Generate & run — fake mode runs the whole
+loop in the page. Or from the CLI:
+
+```bash
+uv run python -m agent.loop specs/start_lamp_arm.yaml --fake
 uv run ruff check . && uv run ruff format .
 ```
 
-Configuration for the real rig goes in `.env` (copy `.env.example`; never commit it).
+## Try it on the real rig
 
-Running the agent loop (planned interface: `agent/loop.py` is still a stub until
-the closed-loop milestone):
-
-```bash
-uv run python -m agent.loop specs/start_lamp_arm.yaml --fake   # fakes only
-uv run python -m agent.loop specs/start_lamp_arm.yaml          # real rig
-```
-
-Compiling and testing generated ST needs the
-[STruC++](https://github.com/Autonomy-Logic/STruCpp) CLI (`strucpp`) on your `PATH`:
+Bench rig: Raspberry Pi + OpenPLC Runtime v4, 3 LEDs, 2 buttons, optional
+SG90 servo on a PCA9685, Logitech C920. The contract is `io_map.yaml`
+(start `%IX0.0`, stop `%IX0.1`, red/green/yellow `%QX0.0–0.2`,
+arm `%QW0` 0–180°).
 
 ```bash
-strucpp specs/<task>/main.st --test specs/<task>/tests.st
+cp .env.example .env   # fill in META_API_KEY, OPENPLC_*, PI_HOST, STIMULUS_URL, FRAMES_URL
+uv run python -m agent.loop specs/start_lamp_arm.yaml --wait-approval 600
 ```
 
-## Status
+Review the pending run in the dashboard and click **Approve & deploy**.
+Safety: the GPIO plugin clamps the arm to 0–180° and drops outputs when the
+PLC stops; every program drives all outputs safe on `stop_btn` within one
+scan; stimulus/frame services bind the Pi's Tailscale address.
 
-Work in progress for the 4 Nov 2026 deadline.
+Rehearsal checklist (including fault injection: pull an LED leg and watch the
+agent blame the wiring, not the code): [`dashboard/DEMO.md`](dashboard/DEMO.md).
+Video shot list: [`docs/VIDEO_SCRIPT.md`](docs/VIDEO_SCRIPT.md).
 
-- [x] Milestone 1: scaffold, interfaces and fakes, diagnosis table with tests
-- [x] Milestone 2: real clients (`plc_client`, `tag_reader`) and the `strucpp` wrapper
-- [ ] Pi services (GPIO plugin, stimulus, frames)
-- [ ] `program.zip` packager
-- [ ] Muse Spark code generation and repair loop
-- [ ] SAM 3.1 vision and measurement
-- [ ] Closed loop, `report.json`, dashboard, demo
+## Known limitations
 
-## Safety
+Bench vision calibration is the honest frontier: real-rig runs to date confirm
+PLC tags against the spec, with camera confirmation still being tuned per
+session (lighting, exposure lock, mask thresholds). The full vision path —
+SAM masks, measurement, three-way diagnosis — is exercised end to end in
+tests and fake runs.
 
-- Nothing is deployed without explicit human approval.
-- `stop_btn` drives every output to a safe state (lamps off, arm 0) within one scan.
-- The GPIO plugin clamps `arm_angle` to 0-180 and forces outputs off when the PLC stops.
-- A failed measurement is reported as "inconclusive", never faked.
+## Layout
 
-## Licence
+```text
+agent/            loop, codegen, deploy, vision, diagnosis (+ fakes for all)
+dashboard/        one-page evidence UI: spec, ST + diffs, camera, timeline, verdict
+pi/               gpio_plugin, stimulus_service, frame_service (run on the Pi)
+specs/            task YAML files (+ generated diagrams)
+tests/            pytest, fakes only
+docs/SPEC.md      full project spec (source of truth)
+```
 
-SPDX-License-Identifier: `MIT` ([LICENSE](LICENSE)). All dependencies are open source with permissive or weak-copyleft
-licences; see [`vision-plc-agent/THIRD_PARTY.md`](vision-plc-agent/THIRD_PARTY.md).
+AI core is Meta models via the Meta Model API (`muse-spark-1.3`, SAM 3.1),
+each behind an interface with a fake. Our code is MIT; every dependency and
+its licence is listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).

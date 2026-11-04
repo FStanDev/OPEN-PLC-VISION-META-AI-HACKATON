@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vision-plc-agent
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Lint and format check
+        run: uv run ruff check . && uv run ruff format --check .
+
+      - name: Run pytest (fakes, no hardware)
+        run: uv run pytest -q
+
+      - name: Install STruC++
+        run: |
+          curl -sL -o /tmp/strucpp.tar.gz "https://github.com/Autonomy-Logic/STruCpp/releases/download/v0.7.0/strucpp-linux-x64.tar.gz"
+          mkdir -p /tmp/strucpp-dist
+          tar xzf /tmp/strucpp.tar.gz -C /tmp/strucpp-dist
+          echo "/tmp/strucpp-dist/strucpp" >> "$GITHUB_PATH"
+
+      - name: Compile and test ST specs
+        run: |
+          strucpp --version
+          mkdir -p build
+          shopt -s nullglob
+          fail=0
+          for main in specs/*/main.st; do
+            dir=$(dirname "$main")
+            name=$(basename "$dir")
+            echo "--- $name ---"
+            strucpp "$main" -o "build/$name.cpp" || fail=1
+            if [ -f "$dir/tests.st" ]; then
+              strucpp "$main" --test "$dir/tests.st" || fail=1
+            fi
+          done
+          exit $fail
