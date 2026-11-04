@@ -1,4 +1,4 @@
-# vision-plc-agent
+# OPEN VISION-PLC-AGENT
 
 An agent that writes PLC logic, runs the tests and uses vision to verify the
 physical result — telling code bugs apart from wiring faults.
@@ -9,7 +9,7 @@ Structured Text, deploys it to an OpenPLC Runtime on a Raspberry Pi, presses
 real buttons, and checks the lamps and servo arm with a camera. When a test
 fails it tells you whether the program is wrong or the wiring is.
 
-> 🎬 Demo video (< 3 min): **[link TBD — upload and paste URL]**
+> 🎬 Demo video (< 3 min): **[https://youtu.be/_patbpiZX98]**
 
 ## How it works
 
@@ -26,12 +26,12 @@ fails it tells you whether the program is wrong or the wiring is.
 5. **See + diagnose.** SAM 3.1 segments the LEDs and the arm; brightness and
    angle are measured against calibration. Spec vs tags vs camera decides:
 
-| Spec vs tags | Tags vs camera | Verdict | Action |
-| --- | --- | --- | --- |
-| match | match | pass | record evidence |
-| mismatch | camera agrees with tags | logic bug | fix ST, retry (max 3) |
-| match | mismatch | physical fault | stop, report address + observed state |
-| mismatch | mismatch | unclear | stop, ask the human |
+| Spec vs tags | Tags vs camera          | Verdict        | Action                                |
+| ------------ | ----------------------- | -------------- | ------------------------------------- |
+| match        | match                   | pass           | record evidence                       |
+| mismatch     | camera agrees with tags | logic bug      | fix ST, retry (max 3)                 |
+| match        | mismatch                | physical fault | stop, report address + observed state |
+| mismatch     | mismatch                | unclear        | stop, ask the human                   |
 
 Every run lands in `runs/<timestamp>-<task_id>/`: spec, prompts, ST, frames,
 `report.json` (with token usage) and a readable `summary.txt`.
